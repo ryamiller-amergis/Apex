@@ -6,44 +6,159 @@ alwaysApply: false
 
 # Agent Chat Surfaces (Common Component)
 
-Any client surface that talks to a chat/agent thread (Agent Home, interviews, ADR/PRD/design-doc
+Every client surface that talks to a chat/agent thread (Agent Home, interviews, ADR/PRD/design-doc
 assistants, standups, dev sessions, calendar assistant, etc.) MUST build on the shared hook
-`useAgentChatSession` (`src/client/hooks/useAgentChatSession.ts`), which wraps `useChatStream`
-(`src/client/hooks/useChatStream.ts`) for the SSE subscription.
+`useAgentChatSession` (`src/client/hooks/useAgentChatSession.ts`).
 
-Do **not** hand-roll agent interaction with raw `fetch` + `EventSource` + `useEffect` polling.
-Reuse the common hook so send/cancel/retry, awaiting-response tracking, preparation state, and
-progress/streaming flags stay consistent across every surface.
+Behind `useAgentChatSession`, governed chat areas run on the shared client chat harness runtime
+(`src/client/chatHarness/`). The runtime opens one WebSocket per thread with automatic reconnect
+and event replay, falls back to HTTP commands when needed, maintains a server-authoritative store,
+and records client timing telemetry. Threads without a harness area keep the HTTP send/cancel/retry
+path.
+
+Do **not** hand-roll agent transport with raw `fetch`, custom sockets, or `useEffect` polling.
+Reuse the common hook so send, steer, summarize, cancel, retry, awaiting-response tracking,
+preparation state, and streaming flags stay consistent across every surface.
 
 ## Use the hook's contract
 
-- **Options**: `locked`, `beforeSend` / `afterSend`, `sendEndpoint` / `cancelEndpoint`,
-  `visibleMessageFilter`, `enablePreparationState`, `initialMessages` / `initialStatus`.
-- **Actions**: `send(text, { attachments, model })`, `retryLast()`, `cancel()`.
-- **Derived flags** (drive UI, don't recompute): `isInteractionBusy`, `isRunning`, `isSending`,
-  `isAwaitingAgentResponse`, `isPreparing`, `hasPreparationError`.
+- **Options**: `harnessArea`, `locked`, `beforeSend` / `afterSend`, `sendEndpoint` /
+  `cancelEndpoint`, `visibleMessageFilter`, `enablePreparationState`, `initialMessages` /
+  `initialStatus`.
+- **Actions**: `send(text, { attachments, model })`, `steer(text)`, `summarize()`, `retryLast()`,
+  `retryFailedRun()`, `cancel()`.
+- **Derived flags** (drive UI, do not recompute): `isInteractionBusy`, `isRunning`, `isSending`,
+  `isAwaitingAgentResponse`, `isPreparing`, `hasPreparationError`, `canWrite`.
 - **Stream state**: `visibleMessages`, `streamingText`, `thinkingText`, `toolProgress`,
-  `phaseEvents`, `runHealth`, `progressLabel`.
+  `phaseEvents`, `runHealth`, `progressLabel`, `connectionState`, `pendingCommands`,
+  `lastReceipt`, `activity`, `summaryNotice`.
 
-## Sanctioned exception to the TanStack rule
+## Three user-facing archetypes (one chat UX inside)
 
-`react-coding-standards.mdc` says server/async state goes through TanStack Query and to never
-`fetch` in effects. Agent chat is the **one sanctioned exception**: SSE streaming plus imperative
-send/cancel live inside `useChatStream` / `useAgentChatSession`. Route new agent surfaces through
-these hooks instead of `useQuery`/`useMutation` — do not re-implement the transport elsewhere.
+Keep surfaces distinct by **workspace and permissions**, never by forked chat mechanics. Every surface fits one of three archetypes, all rendered inside `AgentHarnessPanel` with the exact same composer, streaming, steer, stop, and proposal UX:
+
+1. **Open Chat / Workspace** (*Agent Home, Brainstorm*) — free-form exploration with optional artifact canvas and promote/handoff tools.
+2. **Guided Workflows** (*Interviews, ADR Interviews, Standup, Build Intake*) — workflow header/progress bar, structured Q&A option cards, and a clear finish line.
+3. **Contextual Side-Panel Copilots** (*PRD, Design Doc, Calendar, QA Lab, CAB Release, Ask Apex*) — docked beside an existing record, automatically grounded in that record, with propose-and-apply write tools.
+
+## `AgentHarnessPanel` and its five area slots
+
+Render governed chat areas inside `AgentHarnessPanel`
+(`src/client/components/agentChat/AgentHarnessPanel.tsx`), wired to `useAgentChatSession`. Add
+area-specific UI through its five slots rather than duplicating the panel shell or transcript:
+
+- `header` — area title, status badges, or top-bar actions.
+- `sidePanel` — optional side drawer or inspector beside the conversation.
+- `composerAccessory` — controls near the composer that are specific to the area (mode/skill
+  selector, linked-context chips). The model picker is **not** a slot; see "Model picker" below.
+- `messageActions` — per-message controls (ratings, copy, follow-up actions).
+- `proposal` — proposed edits or domain writes; writes wait for explicit user confirmation and are
+  never auto-approved.
+
+Preserve each area's existing `data-testid` values by passing `testIdPrefix` or explicit `testIds`
+so existing tests keep matching.
+
+## Single live progress, thought process, and failure UX
+
+Do not fork or duplicate live status indicators, thought-process drawers, or failure retry bars
+inside area components:
+
+- **Default transcript first**: prefer `AgentHarnessPanel`'s built-in transcript. Only use
+  `renderTranscript` when an area needs domain-specific message widgets (such as interview Q&A
+  choice cards, standup grouping, or the Brainstorm turn ledger).
+- **Live agent work**: every governed area must render `liveWorkBox` (`AgentLiveWorkBox`) from
+  `AgentHarnessPanel` while a turn is running or retrying — do **not** add bespoke typing-dot
+  spinners or a standalone `<AgentRetryBanner>` alongside it.
+- **Single run-status text component**: render phase/waiting labels through `AgentRunStatusText`
+  (`src/client/components/agentChat/AgentRunStatusText.tsx`) and `friendlyChatProgressLabel` — never
+  hardcode raw infrastructure strings like `"Queued"` or `"Dispatched"` in area components.
+- **Reconnect / retry clearing**: the harness event reducer (`src/client/chatHarness/reducers/eventReducer.ts`) clears `isRetrying` and
+  `retryReason` on any active progress event (`phase`, `thinking`, `tool_call`, `tool_status`,
+  `token`, `message`, `done`). Do not keep a separate client-side reconnecting flag.
+- **Completed thought process**: render `AgentThoughtProcess` above completed agent replies when
+  `activity?.length || activityUnavailable` is present so users get the same collapsible
+  `Thought process · N steps` drawer in every governed area.
+- **Single failure surface**: render one failure/retry control per failed turn — never stack a
+  legacy `Error:` system-message retry bar above `AgentHarnessPanel`'s `messageFailure` card.
+
+## Composer, Steer, and Summarize
+
+Governed surfaces keep one consistent composer experience and expose `steer` and `summarize` directly from `useAgentChatSession`:
+
+- **Keep the composer unlocked while running** on every governed surface (`do not` pass `isRunning`
+  into `composer.disabled`). While running, `AgentComposer` shows the standard send icon for
+  mid-turn follow-ups (`steer`) beside the Stop button, with placeholder `"Send a follow-up while the agent works…"`.
+- Call `steer(text)` to send mid-turn guidance while a run is active, and display command status
+  from `lastReceipt`.
+- `Summarize` is opt-in (`composer.showSummarize === true`) and hidden by default. When opted in,
+  call `summarize()` and display status from `summaryNotice`.
+- The server owns the 5-steer cap and the summary lifecycle. Do not count steers or track summary
+  state independently in client components.
+- Read-only users (`canWrite: false`) cannot send, steer, summarize, cancel, or rate. Disable or
+  hide those controls when `canWrite` is `false`.
+
+## Model picker and composer capabilities
+
+Every governed surface shows the same model dropdown on the left of the composer. Do not build a
+per-area model picker.
+
+- Call `useHarnessModelPicker(threadModel?)` (`src/client/hooks/useHarnessModelPicker.ts`), spread
+  its result into the `composer` prop, and send `model: modelPicker.model` with each `send`. Pass
+  the thread's model when the thread already has one; otherwise the hook uses the admin default,
+  then `DEFAULT_MODEL_ID`.
+- Declare what the area's composer shows in `HARNESS_COMPOSER_CAPABILITIES`
+  (`src/shared/types/chatHarness.ts`): `modelPicker` is always `true`, `modeOptions` is the
+  per-area mode selector (`'artifact-type'` for Brainstorm, `null` otherwise), and `linkedContext`
+  is the per-area linked-context chips (`'interview-references'` for Interviews, `null` otherwise).
+- Area-specific mode and linked-context controls go in `composerAccessory`. Keep their options
+  in the area's config, not in the shared picker.
+- `src/server/__tests__/chatHarness/harnessComposerCapabilities.test.ts` fails when an area id is
+  missing from the map, so add the new area there too.
+- **No new bespoke transport endpoints**: `sendEndpoint`, `cancelEndpoint`, and `retryEndpoint`
+  overrides exist only for legacy migrations (e.g. Brainstorm). New areas must use the shared
+  harness command channel paired with server `areaHooks` (`src/server/services/chatHarness/areaHooks.ts`).
+
+## Sanctioned exception to the TanStack Query rule
+
+`react-coding-standards.mdc` requires server/async state to go through TanStack Query and forbids
+`fetch` in effects. Agent chat is the **one sanctioned exception**: live WebSocket streaming,
+reconnect/replay, and imperative commands live inside `src/client/chatHarness/` and
+`useAgentChatSession`. Route chat surfaces through `useAgentChatSession` instead of
+`useQuery`/`useMutation` — do not re-implement the transport elsewhere.
+
+## Adding a new chat area
+
+Follow `.cursor/rules/chat-harness.mdc` on the server side too: declare an area profile in
+`src/server/services/chatHarness/areaProfiles.ts` and route every Cursor SDK call through
+`src/server/services/cursorSdkAdapter/`.
 
 ```tsx
-// ✅ GOOD — reuse the common hook
+// ✅ GOOD — reuse useAgentChatSession and AgentHarnessPanel with an area profile
 const session = useAgentChatSession(threadId, {
+  harnessArea: 'myArea',
   enablePreparationState: true,
   beforeSend: async () => { /* confirm / sync token */ },
 });
-<button disabled={session.isInteractionBusy} onClick={() => session.send(text)}>Send</button>
+const modelPicker = useHarnessModelPicker(thread?.model);
 
-// ❌ BAD — bespoke transport per component
-const es = new EventSource(`/api/chat/threads/${threadId}/stream`);
-await fetch(`/api/chat/threads/${threadId}/messages`, { method: 'POST', ... });
+<AgentHarnessPanel
+  session={session}
+  testIdPrefix="my-area-chat"
+  composer={{ ...modelPicker }}
+  slots={{
+    header: <MyAreaHeader />,
+    composerAccessory: <MyModeSelector />,
+    proposal: <MyConfirmationCard />,
+  }}
+/>;
+
+// Send with the picked model: session.send(text, { model: modelPicker.model })
+
+// ❌ BAD — new chat area skips the area profile, AgentHarnessPanel, and useAgentChatSession
+const socket = new WebSocket(`/api/custom-chat/${threadId}`);
+await fetch(`/api/custom-chat/${threadId}/messages`, { method: 'POST', ... });
+return <CustomBespokeChatPanel messages={localMessages} />;
 ```
 
-If the hook is missing a capability, extend `useAgentChatSession` (add an option) rather than
-forking the logic into a component.
+If `useAgentChatSession` or `AgentHarnessPanel` lacks a capability, extend the shared hook or
+panel rather than forking chat logic into a feature component.

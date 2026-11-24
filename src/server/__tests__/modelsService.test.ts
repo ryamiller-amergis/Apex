@@ -68,28 +68,45 @@ describe('modelsService', () => {
     else process.env.CURSOR_API_KEY = originalApiKey;
   });
 
-  it('lists a single Auto and does not probe without an API key', async () => {
-    expect(ids(await fetchAvailableModels())).toEqual([
+  it('lists a single Auto with SDK-derived supportedEffortLevels and does not probe without an API key', async () => {
+    const models = await fetchAvailableModels();
+    expect(ids(models)).toEqual([
       'default',
       'grok-4.7',
       'grok-4.6',
       'claude-opus-5-5',
     ]);
+    expect(models.find((m) => m.id === 'default')?.supportedEffortLevels).toEqual([]);
+    expect(models.find((m) => m.id === 'grok-4.7')?.supportedEffortLevels).toEqual([
+      'low',
+      'medium',
+      'high',
+    ]);
     expect(modelProbeInFlightForTests()).toBeNull();
     expect(mockAgentCreate).not.toHaveBeenCalled();
   });
 
-  it('maps a retired model to its family and keeps an effort the model takes as `effort`', async () => {
+  it('maps a retired model to its family and resolves the exact SDK `effort` parameter', async () => {
     await expect(resolveCursorModelChoice('claude-opus-4-6', 'high')).resolves.toEqual({
       model: 'claude-opus-5-5',
       effort: 'high',
+      modelParams: [{ id: 'effort', value: 'high' }],
     });
   });
 
-  it('drops the effort when the model takes it under another parameter name', async () => {
+  it('maps `reasoning_effort` parameter dynamically when the model uses that parameter name', async () => {
     await expect(resolveCursorModelChoice('grok-4.7', 'high')).resolves.toEqual({
       model: 'grok-4.7',
+      effort: 'high',
+      modelParams: [{ id: 'reasoning_effort', value: 'high' }],
+    });
+  });
+
+  it('drops effort and emits empty modelParams when the model declares no effort parameter', async () => {
+    await expect(resolveCursorModelChoice('default', 'high')).resolves.toEqual({
+      model: 'default',
       effort: undefined,
+      modelParams: [],
     });
   });
 
@@ -178,6 +195,19 @@ describe('modelsService', () => {
     await modelProbeInFlightForTests();
 
     expect(mockAgentCreate.mock.calls.length).toBeGreaterThan(probedOnce);
+    expect(ids(await fetchAvailableModels())).toContain('grok-4.7');
+  });
+
+  it('aborts the probe round immediately on a Cursor rate limit error', async () => {
+    process.env.CURSOR_API_KEY = 'test-key';
+    mockAgentCreate.mockRejectedValue(
+      new Error('RateLimitError (rate_limit_exceeded): You have exceeded the rate limit of 30 requests per minute for the get_models endpoint'),
+    );
+
+    await fetchAvailableModels();
+    await modelProbeInFlightForTests();
+
+    expect(mockAgentCreate).toHaveBeenCalledTimes(1);
     expect(ids(await fetchAvailableModels())).toContain('grok-4.7');
   });
 });

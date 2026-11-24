@@ -621,9 +621,9 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
     const labelRegion = screen.getByTestId('agent-run-status-label');
     expect(labelRegion).toHaveAttribute('role', 'status');
     expect(labelRegion).toHaveAttribute('aria-live', 'polite');
-    expect(labelRegion).toHaveTextContent('Queued');
+    expect(labelRegion).toHaveTextContent('Starting…');
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued',
+      'Starting…',
     );
     expect(screen.queryByTestId('agent-run-status-dispatched')).not.toBeInTheDocument();
   });
@@ -641,8 +641,8 @@ describe('ExistingInterviewView — input locked when not in_progress', () => {
 
     renderExistingInterview();
 
-    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Dispatched');
-    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Dispatched');
+    expect(screen.getByTestId('agent-run-status-label')).toHaveTextContent('Starting…');
+    expect(screen.getByTestId('agent-run-status-dispatched')).toHaveTextContent('Starting…');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

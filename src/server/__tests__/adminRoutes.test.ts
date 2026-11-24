@@ -1573,8 +1573,13 @@ describe('GET /api/admin/available-models', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       models: [
-        { id: 'claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
-        { id: 'gpt-4o', displayName: 'gpt-4o' },
+        {
+          id: 'claude-3.5-sonnet',
+          displayName: 'Claude 3.5 Sonnet',
+          parameters: [],
+          supportedEffortLevels: [],
+        },
+        { id: 'gpt-4o', displayName: 'gpt-4o', parameters: [], supportedEffortLevels: [] },
       ],
     });
     expect(MockCursor.models.list).toHaveBeenCalledTimes(1);

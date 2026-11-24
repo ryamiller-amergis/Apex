@@ -7,6 +7,7 @@ import type {
   SetApproversRequest,
 } from '../../shared/types/projectSettings';
 import type { AppSetting } from '../../shared/types/appSettings';
+import type { CursorModelParameterDefinition, EffortLevel } from '../../shared/types/effort';
 import { sortByLabel } from '../utils/sortByLabel';
 
 export function useProjectSkillConfig(project: string | null | undefined, settingsId?: string | null) {
@@ -151,7 +152,11 @@ export function useSetGlobalDefaultModel() {
 export interface AvailableModel {
   id: string;
   displayName: string;
+  supportedEffortLevels?: EffortLevel[];
+  parameters?: CursorModelParameterDefinition[];
 }
+
+export { effortLevelsForModel } from '../../shared/utils/effort';
 
 export function useAvailableModels() {
   return useQuery<AvailableModel[]>({

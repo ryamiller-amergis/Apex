@@ -47,6 +47,11 @@ import {
 import { createArtifactUploader } from '../aiRunsV2Worker/artifactUploader';
 import { resolveShutdownDrainMs } from '../aiRunsV2Worker/shutdownDrain';
 import { interactiveLiveBus } from '../interactiveLiveBus';
+import {
+  chatHarnessControlBus,
+  initChatHarnessControlBus,
+  shutdownChatHarnessControlBus,
+} from '../interactiveControlBus';
 import { LocalCheckoutReader } from '../localCheckoutReader';
 import { boundedSearchLimit } from '../repoReader';
 import { BareRepoReader } from '../repoRead/bareRepoReader';
@@ -725,6 +730,9 @@ export async function main(): Promise<void> {
         {
           model: snapshot.model,
           effort: snapshot.effort ?? null,
+          ...(snapshot.modelParams !== undefined
+            ? { modelParams: snapshot.modelParams }
+            : {}),
           workspaceRef: snapshot.workspaceRef,
           interviewPhase: null,
           sessionKey: snapshot.threadId,
@@ -745,6 +753,9 @@ export async function main(): Promise<void> {
         {
           model: bootstrap.specification.model,
           effort: bootstrap.specification.effort,
+          ...(bootstrap.specification.modelParams !== undefined
+            ? { modelParams: bootstrap.specification.modelParams }
+            : {}),
           workspaceRef: checkout.workspacePath,
           interviewPhase: bootstrap.specification.guidedInterview?.phase ?? null,
           sessionKey: bootstrap.specification.threadId,
@@ -974,6 +985,37 @@ export async function main(): Promise<void> {
       // A turn with no workspace outputs still has to finish. Blob is only
       // needed when there is a file to store.
       if (collected.length === 0) return undefined;
+      const blobAccount = process.env.AI_PLATFORM_V2_BLOB_ACCOUNT_NAME?.trim();
+      if (!blobAccount && process.env.NODE_ENV !== 'production') {
+        const MAX_INLINE_BYTES = 5 * 1024 * 1024;
+        const totalBytes = collected.reduce((sum, f) => sum + f.sizeBytes, 0);
+        if (totalBytes > MAX_INLINE_BYTES) {
+          console.warn(
+            JSON.stringify({
+              event: 'InteractiveArtifactsInlineFallbackSkipped',
+              runId: bootstrap.runId,
+              fileCount: collected.length,
+              totalBytes,
+            }),
+          );
+          return undefined;
+        }
+        console.log(
+          JSON.stringify({
+            event: 'InteractiveArtifactsInlineFallback',
+            runId: bootstrap.runId,
+            fileCount: collected.length,
+            totalBytes,
+          }),
+        );
+        return {
+          inlineArtifacts: collected.map((file) => ({
+            path: file.relativePath,
+            contentBase64: file.content.toString('base64'),
+            sha256: file.sha256,
+          })),
+        };
+      }
       const container = artifactContainerName();
       const uploader = createArtifactUploader({
         target: {
@@ -997,16 +1039,24 @@ export async function main(): Promise<void> {
     // is unconfigured — durability then rides ingest + client safety-net poll.
     publishLive: (threadId, envelope) =>
       interactiveLiveBus.publish(threadId, envelope),
+    // Redis control channel for low-latency steer/cancel delivery and acks.
+    controlBus: chatHarnessControlBus,
   });
-  // Eagerly connect the publisher so first-token latency isn't paid lazily.
-  await interactiveLiveBus.init();
+  // Eagerly connect live + control Redis channels so first-token / steer latency isn't paid lazily.
+  await Promise.all([
+    interactiveLiveBus.init(),
+    initChatHarnessControlBus(),
+  ]);
   setInteractiveActorRuntime({ logic, callback });
 
   const shutdownDrain = createInteractiveShutdownDrain({
     drainMs: resolveShutdownDrainMs(process.env.AI_RUNS_V2_SHUTDOWN_DRAIN_MS),
     activeTurnCount: () =>
       turnQueue.activeThreadCount() + interactiveInFlightInvocations.count(),
-    dispose: () => logic.disposeAll(),
+    dispose: async () => {
+      await logic.disposeAll();
+      await shutdownChatHarnessControlBus().catch(() => {});
+    },
     exit: (code) => void exitAfterFlush(code),
   });
   process.on('SIGTERM', () => shutdownDrain.shutdown('SIGTERM'));

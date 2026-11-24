@@ -35,6 +35,7 @@ export type PublishTerminalInput = Readonly<{
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  costUsd?: number;
 }>;
 
 export type ResultPublisher = {
@@ -98,6 +99,9 @@ export function createResultPublisher(deps: {
         ...(input.cacheWriteTokens === undefined
           ? {}
           : { cacheWriteTokens: input.cacheWriteTokens }),
+        ...(input.costUsd === undefined
+          ? {}
+          : { costUsd: input.costUsd }),
       };
       attempted = result;
       await deps.send(result.eventId, result);

@@ -901,7 +901,7 @@ describe('useAgentChatSession', () => {
     );
   });
 
-  it('shows Queued immediately after a durable InteractiveTurnAcceptedResponse', async () => {
+  it('shows Starting… immediately after a durable InteractiveTurnAcceptedResponse', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -920,10 +920,10 @@ describe('useAgentChatSession', () => {
     });
 
     expect(result.current.progressPhase).toBe('queued');
-    expect(result.current.progressLabel).toBe('Queued');
+    expect(result.current.progressLabel).toBe('Starting…');
   });
 
-  it('shows Dispatched when the durable stream advances to that phase', async () => {
+  it('shows Starting… when the durable stream advances to dispatched', async () => {
     currentStreamReturn = {
       ...mockStreamReturn,
       status: 'running',
@@ -933,7 +933,7 @@ describe('useAgentChatSession', () => {
     const { result } = renderHook(() => useAgentChatSession('thread-1'));
 
     expect(result.current.progressPhase).toBe('dispatched');
-    expect(result.current.progressLabel).toBe('Dispatched');
+    expect(result.current.progressLabel).toBe('Starting…');
   });
 
   it('stays awaiting after sending from an idle-closed thread while status is still closed', async () => {

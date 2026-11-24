@@ -114,55 +114,60 @@ jest.mock('../ThreadHistorySidebar', () => ({
   ThreadHistorySidebar: () => <div {...{ 'data-testid': 'thread-history-sidebar-mock' }}>Full history</div>,
 }));
 
+jest.mock('../agentChat/AgentComposer', () => ({
+  AgentComposer: ({
+    testIdPrefix,
+    model,
+    value,
+    onChange,
+    onSend,
+    onCancel,
+    canSend,
+    isRunning,
+    isCancelling,
+    before,
+    after,
+    placeholder,
+  }: {
+    testIdPrefix: string;
+    model?: string;
+    value?: string;
+    onChange?: (value: string) => void;
+    onSend: () => void;
+    onCancel?: () => void;
+    canSend?: boolean;
+    isRunning?: boolean;
+    isCancelling?: boolean;
+    before?: React.ReactNode;
+    after?: React.ReactNode;
+    placeholder?: string;
+  }) => (
+    <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
+      Composer
+      {before}
+      <textarea
+        data-testid={`${testIdPrefix}-message-input`}
+        placeholder={placeholder}
+        value={value ?? ''}
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+      <button type="button" onClick={onSend} disabled={canSend === false}>Send mock</button>
+      {isRunning && onCancel && (
+        <button type="button" onClick={onCancel} disabled={isCancelling}>
+          {isCancelling ? 'Stopping…' : 'Stop'}
+        </button>
+      )}
+      {after}
+    </div>
+  ),
+}));
+
 jest.mock('../agentChat', () => {
   const actual = jest.requireActual('../agentChat');
+  const { AgentComposer } = jest.requireMock('../agentChat/AgentComposer');
   return {
     ...actual,
-    AgentComposer: ({
-      testIdPrefix,
-      model,
-      value,
-      onChange,
-      onSend,
-      onCancel,
-      canSend,
-      isRunning,
-      isCancelling,
-      before,
-      after,
-      placeholder,
-    }: {
-      testIdPrefix: string;
-      model?: string;
-      value?: string;
-      onChange?: (value: string) => void;
-      onSend: () => void;
-      onCancel?: () => void;
-      canSend?: boolean;
-      isRunning?: boolean;
-      isCancelling?: boolean;
-      before?: React.ReactNode;
-      after?: React.ReactNode;
-      placeholder?: string;
-    }) => (
-      <div {...{ 'data-testid': `${testIdPrefix}-composer-mock`, 'data-model': model }}>
-        Composer
-        {before}
-        <textarea
-          data-testid={`${testIdPrefix}-message-input`}
-          placeholder={placeholder}
-          value={value ?? ''}
-          onChange={(event) => onChange?.(event.target.value)}
-        />
-        <button type="button" onClick={onSend} disabled={canSend === false}>Send mock</button>
-        {isRunning && onCancel && (
-          <button type="button" onClick={onCancel} disabled={isCancelling}>
-            {isCancelling ? 'Stopping…' : 'Stop'}
-          </button>
-        )}
-        {after}
-      </div>
-    ),
+    AgentComposer,
   };
 });
 
@@ -937,6 +942,49 @@ describe('ChatAgentPanel shared Home shell', () => {
     fireEvent.click(screen.getByTestId('chat-agent-message-retry-btn'));
     expect(mockRetryFailedRun).toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('does not duplicate the failure card when the transcript already ends with an Error system message', () => {
+    const failedThread: ChatThread = {
+      ...thread,
+      status: 'error',
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          text: 'what is on the home page',
+          ts: '2026-09-23T12:00:00.000Z',
+        },
+        {
+          id: 'e1',
+          role: 'system',
+          text: 'Error: Something went wrong while answering. Please retry.',
+          ts: '2026-09-23T12:00:01.000Z',
+        },
+      ],
+    };
+    mockSessionOverrides = {
+      messages: failedThread.messages,
+      status: 'error',
+      retryableRunId: '50000000-0000-4000-8000-000000000001',
+      lastFailure: {
+        reason: 'Something went wrong while answering. Please retry.',
+        runId: '50000000-0000-4000-8000-000000000001',
+        failedAt: '2026-09-23T12:00:01.000Z',
+      },
+    };
+
+    render(
+      <ChatAgentPanel
+        thread={failedThread}
+        isOpen
+        onClose={jest.fn()}
+        onNewChat={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-run-terminal')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-message-failure')).not.toBeInTheDocument();
   });
 });
 

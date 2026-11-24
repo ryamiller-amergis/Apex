@@ -822,6 +822,8 @@ async function loadCapabilities(userId: string, project: string): Promise<Handof
 export const defaultTargetServices: TargetServices = {
   async createThread(input) {
     const { createThread } = await import('./chatAgentService');
+    const { getAreaProfile } = await import('./chatHarness/areaProfiles');
+    const profile = getAreaProfile(input.module);
     const thread = await createThread(input.userId, {
       project: input.project,
       agentModule: input.module,
@@ -831,7 +833,10 @@ export const defaultTargetServices: TargetServices = {
       skillPath: input.skillPath ?? undefined,
       freeformContext: input.freeformContext,
       skillSettingsId: input.repository.settingsId ?? undefined,
-    }, { skipAutoKickoff: true });
+    }, {
+      skipAutoKickoff: true,
+      harness: { area: profile.area, version: profile.version },
+    });
     return thread.id;
   },
   async findInterview(interviewId) {

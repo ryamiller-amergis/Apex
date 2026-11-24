@@ -271,7 +271,8 @@ beforeEach(() => {
   });
   global.fetch = jest.fn(() => Promise.resolve({
     ok: true,
-    json: () => Promise.resolve({ ok: true }),
+    // `interactions: 0` keeps ArtifactUsageStrip (fetches the same way) hidden.
+    json: () => Promise.resolve({ ok: true, interactions: 0 }),
   })) as unknown as jest.Mock;
 });
 

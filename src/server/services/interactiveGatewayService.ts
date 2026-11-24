@@ -1,29 +1,24 @@
 /**
- * FEAT-007 / TBI-008 — interactive WebSocket agent gateway (transport core).
+ * FEAT-007 / TBI-008 + FEAT-002 / TBI-010 — interactive WebSocket agent gateway
+ * (transport core).
  *
  * The stateless gateway attaches a client socket to a thread's live agent
- * stream. It reproduces the exact durability + ordering contract already used
- * by the SSE route (`GET /api/chat/threads/:id/stream`) so the two transports
- * are interchangeable during rollout:
+ * stream and command channel:
  *
  *   1. Replay durable `agent_run_events` from the client's last acknowledged
  *      ordinal (`lastEventId`) — the client resumes with no gaps or dupes.
- *   2. Subscribe to the in-memory owner stream (this instance's transient thread
- *      events, e.g. the just-persisted user message) AND the Redis live bus,
- *      onto which the ACA actor tier publishes ephemeral token/tool/progress
- *      frames. Live push rides Redis; durability rides Postgres.
- *   3. Buffer live events during replay, then flush them ordered by
+ *   2. Emit a text-free `state` frame on connect and on every state change.
+ *   3. Accept inbound `command` frames, dispatch them through `onCommand`, and
+ *      return `receipt` + refreshed `state` frames (or `error` frames on
+ *      invalid command payloads).
+ *   4. Subscribe to cross-instance `thread_commands` pg_notify receipts, the
+ *      in-memory thread stream, durable run events, and the Redis live bus.
+ *   5. Buffer live events during replay, then flush them ordered by
  *      (timestamp, sequence) so replay always precedes live (VT-04).
- *   4. De-duplicate by `eventId` across replay + both live sources.
- *
- * NOTE: the actor runs in a DIFFERENT process (ACA) than this gateway (App
- * Service), so there is no same-instance echo to drop. The historical
- * `shouldForwardPgRunEvent` same-instance filter — which silently dropped every
- * co-located pg_notify frame and hung the socket — is intentionally gone.
+ *   6. De-duplicate by `eventId` across replay + live sources.
  *
  * Transport specifics (ws handshake, auth, ping/pong) live in the host mount;
- * this core is socket-agnostic and never inspects prompt/snapshot content
- * (BR-019).
+ * this core is socket-agnostic and never logs prompt/snapshot/command text.
  */
 import type {
   AgentRunEventEnvelope,
@@ -32,9 +27,20 @@ import type {
   SseEvent,
 } from '../../shared/types/chat';
 import {
+  isHarnessCommandFrame,
+  type HarnessCommandBody,
+  type HarnessErrorFrame,
+  type HarnessGatewayOutboundFrame,
+  type HarnessReceipt,
+  type HarnessReceiptFrame,
+  type HarnessStateFrame,
+  type HarnessThreadState,
+} from '../../shared/types/chatHarness';
+import {
   replayRunEventPage as defaultReplayRunEventPage,
   replayRunEvents as defaultReplayRunEvents,
   subscribeRunEvents as defaultSubscribeRunEvents,
+  subscribeThreadCommands as defaultSubscribeThreadCommands,
   type RunEventPage,
 } from './pgNotifyService';
 import { interactiveLiveBus } from './interactiveLiveBus';
@@ -47,11 +53,17 @@ import {
   eventForRunEnvelope as defaultEventForRunEnvelope,
 } from '../routes/chat';
 import { isFeatureEnabled } from './featureFlagService';
+import { HarnessProfileError } from './chatHarness/areaProfiles';
+import { HarnessCommandError } from './chatHarness/chatHarnessCommandHandler';
+import { loadHarnessThreadState } from './chatHarness/chatHarnessStateFrame';
+
+const MAX_DEDUPED_RECEIPTS = 500;
 
 /** Minimal socket contract satisfied by a `ws` WebSocket (and test fakes). */
 export interface InteractiveGatewaySocket {
   send(data: string): void;
   onClose(handler: () => void): void;
+  onMessage?: (handler: (data: string) => void) => void;
 }
 
 /**
@@ -63,6 +75,10 @@ export interface InteractiveGatewayFrame {
   id: string;
   data: SseEvent;
 }
+
+export type InteractiveGatewayOutboundFrame =
+  | InteractiveGatewayFrame
+  | HarnessGatewayOutboundFrame;
 
 export interface InteractiveThreadSnapshot {
   messages: ChatMessage[];
@@ -79,12 +95,19 @@ export interface AttachInteractiveThreadOptions {
    * filters by instance (the actor is a different process), so this is unused.
    */
   localInstance?: string;
+  /** Caller write capability for the attached thread (annotated onto state frames). */
+  canWrite?: boolean;
 }
 
 export interface InteractiveGatewayDependencies {
   loadThreadSnapshot: (
     threadId: string
   ) => Promise<InteractiveThreadSnapshot | null>;
+  /**
+   * Load the text-free `HarnessThreadState` frame for this thread. Optional so
+   * legacy unit tests without harness state continue unchanged.
+   */
+  loadThreadState?: (threadId: string) => Promise<HarnessThreadState | null>;
   /**
    * Paginated durable replay. Preferred by the gateway; loops while `hasMore`.
    */
@@ -132,6 +155,22 @@ export interface InteractiveGatewayDependencies {
     threadId: string,
     callback: (envelope: AgentRunEventEnvelope) => void
   ) => () => void;
+  /**
+   * Subscribe to cross-instance harness command receipt updates (`thread_commands`).
+   */
+  subscribeThreadCommands?: (
+    threadId: string,
+    callback: (receipt: HarnessReceipt) => void
+  ) => () => void;
+  /**
+   * Subscribe to Redis control-ack updates for this thread so multi-instance
+   * App Service sockets also process actor steer/cancel dispositions.
+   */
+  subscribeControlAcks?: (threadId: string) => () => void;
+  /**
+   * Handle an inbound validated harness command frame from the socket.
+   */
+  onCommand?: (command: HarnessCommandBody) => Promise<HarnessReceipt>;
   eventForRunEnvelope: (envelope: AgentRunEventEnvelope) => SseEvent;
 }
 
@@ -153,14 +192,25 @@ const defaultDependencies: InteractiveGatewayDependencies = {
       activeRunId: thread.activeRunId,
     };
   },
+  loadThreadState: (threadId) => loadHarnessThreadState(threadId),
   replayRunEventPage: defaultReplayRunEventPage,
   replayRunEvents: defaultReplayRunEvents,
   subscribeDurableEvents: defaultSubscribeRunEvents,
   subscribeToThread: defaultSubscribeToThread,
   subscribeLiveEvents: (threadId, callback) =>
     interactiveLiveBus.subscribe(threadId, callback),
+  subscribeThreadCommands: defaultSubscribeThreadCommands,
   eventForRunEnvelope: defaultEventForRunEnvelope,
 };
+
+export function createInteractiveGatewayDependencies(
+  overrides: Partial<InteractiveGatewayDependencies> = {},
+): InteractiveGatewayDependencies {
+  return {
+    ...defaultDependencies,
+    ...overrides,
+  };
+}
 
 function resolveReplayPage(
   dependencies: InteractiveGatewayDependencies,
@@ -191,9 +241,32 @@ function resolveReplayPage(
   };
 }
 
+function isStateChangingEvent(
+  event: SseEvent,
+  envelope?: AgentRunEventEnvelope,
+): boolean {
+  if (event.type === 'status' || event.type === 'done' || event.type === 'error') {
+    return true;
+  }
+  if (!envelope) return false;
+  const envType = envelope.type as string;
+  const envStatus = envelope.status as string | undefined;
+  return (
+    envType === 'done' ||
+    envType === 'error' ||
+    envType === 'status' ||
+    envType === 'phase' ||
+    envType === 'summary' ||
+    envType === 'cancel' ||
+    envStatus === 'completed' ||
+    envStatus === 'failed' ||
+    envStatus === 'cancelled'
+  );
+}
+
 /**
  * Attach `socket` to `threadId`'s stream. Resolves once replay has flushed and
- * the socket is live; returns a detach function that unsubscribes both sources.
+ * the socket is live; returns a detach function that unsubscribes all sources.
  * The socket's own close handler also detaches.
  */
 export async function attachInteractiveThreadStream(
@@ -206,6 +279,8 @@ export async function attachInteractiveThreadStream(
   const replayPage = resolveReplayPage(dependencies);
   const sentEventIds = new Set<string>();
   const sentMessageIds = new Set<string>();
+  const sentReceiptKeys = new Set<string>();
+  const sentReceiptKeyOrder: string[] = [];
   let replaying = true;
   let detached = false;
   let arrivalOrder = 0;
@@ -214,6 +289,58 @@ export async function attachInteractiveThreadStream(
     envelope?: AgentRunEventEnvelope;
     arrival: number;
   }> = [];
+  const pendingReceipts: HarnessReceipt[] = [];
+
+  const rememberReceiptKey = (receipt: HarnessReceipt): boolean => {
+    const key = `${receipt.commandId}:${receipt.status}:${receipt.updatedAt}`;
+    if (sentReceiptKeys.has(key)) return false;
+    sentReceiptKeys.add(key);
+    sentReceiptKeyOrder.push(key);
+    if (sentReceiptKeyOrder.length > MAX_DEDUPED_RECEIPTS) {
+      const oldest = sentReceiptKeyOrder.shift();
+      if (oldest) sentReceiptKeys.delete(oldest);
+    }
+    return true;
+  };
+
+  const sendReceipt = (receipt: HarnessReceipt): void => {
+    if (detached) return;
+    if (!rememberReceiptKey(receipt)) return;
+    const frame: HarnessReceiptFrame = {
+      type: 'receipt',
+      receipt,
+    };
+    socket.send(JSON.stringify(frame));
+  };
+
+  const sendError = (code: string, commandId?: string): void => {
+    if (detached) return;
+    const frame: HarnessErrorFrame = {
+      type: 'error',
+      code,
+      ...(commandId ? { commandId } : {}),
+    };
+    socket.send(JSON.stringify(frame));
+  };
+
+  const emitStateFrame = async (): Promise<void> => {
+    if (detached || !dependencies.loadThreadState) return;
+    try {
+      const loaded = await dependencies.loadThreadState(threadId);
+      if (!loaded || detached) return;
+      const state: HarnessThreadState =
+        options.canWrite !== undefined && loaded.canWrite === undefined
+          ? { ...loaded, canWrite: options.canWrite }
+          : loaded;
+      const frame: HarnessStateFrame = {
+        type: 'state',
+        state,
+      };
+      socket.send(JSON.stringify(frame));
+    } catch {
+      // A failed state frame load must not kill the stream.
+    }
+  };
 
   const sendEvent = (event: SseEvent, eventId = ''): void => {
     if (detached) return;
@@ -247,15 +374,20 @@ export async function attachInteractiveThreadStream(
         envelope,
         arrival: arrivalOrder++,
       });
-    } else if (envelope) {
-      sendEnvelope(envelope);
     } else {
-      sendEvent(event);
+      if (envelope) {
+        sendEnvelope(envelope);
+      } else {
+        sendEvent(event);
+      }
+      if (isStateChangingEvent(event, envelope)) {
+        void emitStateFrame();
+      }
     }
   };
 
-  // Subscribe BEFORE replay so no live event is missed during the async
-  // replay window (mirrors the SSE route ordering).
+  // Subscribe BEFORE replay so no live event or receipt is missed during the
+  // async replay window (mirrors the SSE route ordering).
   const unsubscribeThread = dependencies.subscribeToThread(
     threadId,
     (event, envelope) => queueOrSend(event, envelope)
@@ -275,6 +407,20 @@ export async function attachInteractiveThreadStream(
       queueOrSend(dependencies.eventForRunEnvelope(envelope), envelope);
     }
   );
+  const unsubscribeCommands = dependencies.subscribeThreadCommands
+    ? dependencies.subscribeThreadCommands(threadId, (receipt) => {
+        if (detached) return;
+        if (replaying) {
+          pendingReceipts.push(receipt);
+        } else {
+          sendReceipt(receipt);
+          void emitStateFrame();
+        }
+      })
+    : () => {};
+  const unsubscribeControlAcks = dependencies.subscribeControlAcks
+    ? dependencies.subscribeControlAcks(threadId)
+    : () => {};
 
   const detach = (): void => {
     if (detached) return;
@@ -282,8 +428,53 @@ export async function attachInteractiveThreadStream(
     unsubscribeThread();
     unsubscribeDurable();
     unsubscribeLive();
+    unsubscribeCommands();
+    unsubscribeControlAcks();
   };
   socket.onClose(detach);
+
+  if (socket.onMessage && dependencies.onCommand) {
+    const handleCommand = dependencies.onCommand;
+    socket.onMessage((raw: string) => {
+      void (async () => {
+        if (detached) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          sendError('invalid-command');
+          return;
+        }
+
+        const candidateCommandId =
+          parsed &&
+          typeof parsed === 'object' &&
+          typeof (parsed as { commandId?: unknown }).commandId === 'string'
+            ? (parsed as { commandId: string }).commandId
+            : undefined;
+
+        if (!isHarnessCommandFrame(parsed)) {
+          sendError('invalid-command', candidateCommandId);
+          return;
+        }
+
+        const { type: _frameType, ...commandBody } = parsed;
+        try {
+          const receipt = await handleCommand(commandBody as HarnessCommandBody);
+          if (detached) return;
+          sendReceipt(receipt);
+          await emitStateFrame();
+        } catch (err) {
+          if (detached) return;
+          if (err instanceof HarnessCommandError || err instanceof HarnessProfileError) {
+            sendError(err.code, commandBody.commandId);
+          } else {
+            sendError('command-failed', commandBody.commandId);
+          }
+        }
+      })();
+    });
+  }
 
   // Mirror the SSE route's initial snapshot so a socket that attaches after a
   // send still receives the persisted user message and current running state.
@@ -307,8 +498,18 @@ export async function attachInteractiveThreadStream(
     // A failed snapshot does not prevent durable/live streaming.
   }
 
+  // Emit one initial `state` frame right after snapshot, before replaying events.
+  await emitStateFrame();
+
+  // Only replay historical durable run events when the thread has an active
+  // running turn (or when no snapshot could be loaded). On an idle/settled
+  // thread, the snapshot above already delivered every persisted message, the
+  // terminal status, and the state frame; replaying old `agent_run_events` on
+  // reconnect (especially if `lastEventId` came from an ephemeral Redis frame
+  // absent from Postgres) would replay prior turns' thinking/phase events and
+  // resurrect the UI into a phantom running state.
   const shouldReplayEvents =
-    Boolean(options.lastEventId) || !snapshot || snapshot.status === 'running';
+    !snapshot || snapshot.status === 'running';
   if (shouldReplayEvents) {
     const coldStart =
       !options.lastEventId && snapshot?.status === 'running'
@@ -336,6 +537,7 @@ export async function attachInteractiveThreadStream(
 
   // Flush live events buffered during replay, ordered so replay precedes live.
   replaying = false;
+  let stateChangedDuringReplay = false;
   pendingLiveEvents
     .sort((left, right) =>
       left.envelope && right.envelope
@@ -346,7 +548,19 @@ export async function attachInteractiveThreadStream(
     .forEach(({ event, envelope }) => {
       if (envelope) sendEnvelope(envelope);
       else sendEvent(event);
+      if (isStateChangingEvent(event, envelope)) {
+        stateChangedDuringReplay = true;
+      }
     });
+
+  for (const receipt of pendingReceipts) {
+    sendReceipt(receipt);
+    stateChangedDuringReplay = true;
+  }
+
+  if (stateChangedDuringReplay) {
+    void emitStateFrame();
+  }
 
   return detach;
 }

@@ -6,10 +6,6 @@ export const BRAINSTORM_FLAG = 'brainstorm' as const;
 export const BRAINSTORM_VIEW = 'brainstorm:view' as const;
 export const BRAINSTORM_CREATE = 'brainstorm:create' as const;
 
-/** Repository-relative path of the built-in Brainstorm skill. */
-export const BRAINSTORM_SKILL_PATH = '.cursor/skills/brainstorm/SKILL.md' as const;
-export const BRAINSTORM_SKILL_NAME = 'Brainstorm' as const;
-
 export const BRAINSTORM_TITLE_MAX_LENGTH = 80;
 export const BRAINSTORM_MESSAGE_MAX_LENGTH = 20_000;
 export const BRAINSTORM_BIO_MAX_LENGTH = 1_000;

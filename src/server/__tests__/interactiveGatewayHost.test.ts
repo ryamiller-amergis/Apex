@@ -2,7 +2,10 @@ import type http from 'http';
 import type { Duplex } from 'stream';
 import type { RequestHandler } from 'express';
 import { WebSocketServer } from 'ws';
-import { mountInteractiveGateway } from '../services/interactiveGatewayHost';
+import {
+  isInteractiveGatewayEnabled,
+  mountInteractiveGateway,
+} from '../services/interactiveGatewayHost';
 import { getUserId } from '../utils/requestUser';
 import { resolveThreadAccess } from '../services/threadAccessService';
 import { isFeatureEnabled } from '../services/featureFlagService';
@@ -25,6 +28,13 @@ jest.mock('../services/featureFlagService', () => ({
 
 jest.mock('../services/interactiveGatewayService', () => ({
   attachInteractiveThreadStream: jest.fn(),
+  createInteractiveGatewayDependencies: jest.fn((overrides) => overrides),
+}));
+
+jest.mock('../services/chatHarness/chatHarnessCommandHandler', () => ({
+  canCommandThread: jest.fn(async () => true),
+  chatHarnessCommandHandler: { handle: jest.fn() },
+  inferHarnessAreaFromThread: jest.fn(() => 'agent-home'),
 }));
 
 const mockGetUserId = getUserId as jest.MockedFunction<typeof getUserId>;
@@ -41,6 +51,7 @@ describe('interactive gateway host', () => {
     jest.clearAllMocks();
     mockGetUserId.mockReturnValue('user-1');
     mockResolveThreadAccess.mockResolvedValue({
+      access: 'owner',
       thread: {
         id: 'thread-1',
         kickoff: { project: 'Apex' },
@@ -48,7 +59,7 @@ describe('interactive gateway host', () => {
     } as never);
   });
 
-  it('authorizes the WebSocket gateway with the canonical V2 transport flag', async () => {
+  it('opens the WebSocket gateway without env or feature-flag gates when session and read access succeed', async () => {
     let upgrade:
       | ((req: http.IncomingMessage, socket: Duplex, head: Buffer) => void)
       | undefined;
@@ -56,9 +67,46 @@ describe('interactive gateway host', () => {
     mockWebSocketServer.mockImplementation(() => ({
       handleUpgrade,
     }));
-    mockIsFeatureEnabled.mockImplementation(
-      async (key: string) => key === 'ai-runs-v2-transport',
+    mockIsFeatureEnabled.mockResolvedValue(false);
+    const server = {
+      on: jest.fn((event: string, handler: typeof upgrade) => {
+        if (event === 'upgrade') upgrade = handler;
+      }),
+    } as unknown as http.Server;
+    const socket = {
+      destroy: jest.fn(),
+    } as unknown as Duplex;
+
+    expect(isInteractiveGatewayEnabled()).toBe(true);
+
+    mountInteractiveGateway(server, {
+      sessionMiddleware: pass,
+      passportInitialize: pass,
+      passportSession: pass,
+    });
+    upgrade?.(
+      { url: '/api/interactive/threads/thread-1/stream' } as http.IncomingMessage,
+      socket,
+      Buffer.alloc(0),
     );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(mockIsFeatureEnabled).not.toHaveBeenCalled();
+    expect(handleUpgrade).toHaveBeenCalledTimes(1);
+    expect(socket.destroy).not.toHaveBeenCalled();
+  });
+
+  it('destroys the socket when the caller lacks thread read access', async () => {
+    let upgrade:
+      | ((req: http.IncomingMessage, socket: Duplex, head: Buffer) => void)
+      | undefined;
+    const handleUpgrade = jest.fn();
+    mockWebSocketServer.mockImplementation(() => ({
+      handleUpgrade,
+    }));
+    mockResolveThreadAccess.mockResolvedValueOnce(null);
     const server = {
       on: jest.fn((event: string, handler: typeof upgrade) => {
         if (event === 'upgrade') upgrade = handler;
@@ -82,11 +130,7 @@ describe('interactive gateway host', () => {
       setImmediate(resolve);
     });
 
-    expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
-      'ai-runs-v2-transport',
-      { userId: 'user-1', project: 'Apex' },
-    );
-    expect(handleUpgrade).toHaveBeenCalledTimes(1);
-    expect(socket.destroy).not.toHaveBeenCalled();
+    expect(handleUpgrade).not.toHaveBeenCalled();
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
   });
 });

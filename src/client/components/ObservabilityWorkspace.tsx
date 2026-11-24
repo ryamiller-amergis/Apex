@@ -23,12 +23,13 @@ import {
   type ObservabilityTrendWindow,
   type ObservabilityWindowComparisonMap,
 } from '../../shared/types/observability';
-import { effortLabel } from '../../shared/utils/effort';
+import { effortLabel, effortLevelsForModel } from '../../shared/utils/effort';
 import {
   buildFallbackPoDigestResponse,
   sanitizeObservabilityDigestForDisplay,
 } from '../../shared/utils/observabilityPoDigest';
 import { DEFAULT_MODEL_ID, PLATFORM_MODEL_OPTIONS } from '../config/models';
+import { AiExperienceDashboard } from './AiExperienceDashboard';
 import { ApexLoader } from './ApexLoader';
 import { useAppShell } from '../hooks/useAppShell';
 import {
@@ -97,6 +98,7 @@ interface ObservabilityWorkspaceProps {
 }
 
 export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ project }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'po-digest' | 'ai-experience'>('po-digest');
   const [selectedWindow, setSelectedWindow] = useState<ObservabilityTrendWindow>('7d');
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL_ID);
   const [selectedEffort, setSelectedEffort] = useState<EffortLevel>(OBSERVABILITY_PO_DEFAULT_EFFORT);
@@ -112,6 +114,21 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
     selectedEffort,
   );
   const generateMutation = useGenerateObservabilityPoDigest(resolvedProject);
+
+  const supportedEffortLevels = useMemo(
+    () => effortLevelsForModel(selectedModel, modelsQuery.data ?? []),
+    [selectedModel, modelsQuery.data],
+  );
+  const effortSelectUnsupported =
+    supportedEffortLevels !== null && supportedEffortLevels.length === 0;
+  const effortSelectOptions: ReadonlyArray<EffortLevel> =
+    supportedEffortLevels !== null
+      ? supportedEffortLevels.includes(selectedEffort)
+        ? supportedEffortLevels
+        : supportedEffortLevels.length > 0
+          ? [...supportedEffortLevels, selectedEffort]
+          : []
+      : EFFORT_LEVELS;
 
   const modelOptions = useMemo(() => {
     const merged = new Map<string, string>();
@@ -173,8 +190,66 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
   }, [digest]);
 
   return (
-    <section className={styles.workspace} {...{ 'data-testid': 'observability-workspace' }}>
-      <div className={styles.header}>
+    <div className={styles.subTabShell} {...{ 'data-testid': 'observability-shell' }}>
+      <div
+        className={styles.subTabBar}
+        role="tablist"
+        aria-label="Observability views"
+        {...{ 'data-testid': 'observability-subtabs' }}
+      >
+        <button
+          type="button"
+          role="tab"
+          id="observability-subtab-po-digest"
+          aria-selected={activeSubTab === 'po-digest'}
+          aria-controls="observability-subpanel-po-digest"
+          className={
+            activeSubTab === 'po-digest'
+              ? `${styles.subTabButton} ${styles.subTabButtonActive}`
+              : styles.subTabButton
+          }
+          onClick={() => setActiveSubTab('po-digest')}
+          {...{ 'data-testid': 'observability-subtab-po-digest' }}
+        >
+          Product Owner Digest
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="observability-subtab-ai-experience"
+          aria-selected={activeSubTab === 'ai-experience'}
+          aria-controls="observability-subpanel-ai-experience"
+          className={
+            activeSubTab === 'ai-experience'
+              ? `${styles.subTabButton} ${styles.subTabButtonActive}`
+              : styles.subTabButton
+          }
+          onClick={() => setActiveSubTab('ai-experience')}
+          {...{ 'data-testid': 'observability-subtab-ai-experience' }}
+        >
+          AI Experience
+        </button>
+      </div>
+
+      {activeSubTab === 'ai-experience' ? (
+        <section
+          id="observability-subpanel-ai-experience"
+          role="tabpanel"
+          aria-labelledby="observability-subtab-ai-experience"
+          className={styles.aiExperienceSurface}
+          {...{ 'data-testid': 'observability-ai-experience-panel' }}
+        >
+          <AiExperienceDashboard flagProject={resolvedProject} />
+        </section>
+      ) : (
+        <section
+          id="observability-subpanel-po-digest"
+          role="tabpanel"
+          aria-labelledby="observability-subtab-po-digest"
+          className={styles.workspace}
+          {...{ 'data-testid': 'observability-workspace' }}
+        >
+          <div className={styles.header}>
         <div className={styles.titleRow}>
           <div>
             <h2 className={styles.title}>Product Owner Observability</h2>
@@ -261,15 +336,22 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
               <select
                 id="observability-effort-select"
                 className={styles.filterInput}
-                value={selectedEffort}
-                onChange={(e) => setSelectedEffort(e.target.value as EffortLevel)}
+                value={effortSelectUnsupported ? '' : selectedEffort}
+                onChange={(e) => {
+                  if (e.target.value) setSelectedEffort(e.target.value as EffortLevel);
+                }}
+                disabled={effortSelectUnsupported}
                 {...{ 'data-testid': 'observability-effort-select' }}
               >
-                {EFFORT_LEVELS.map((level) => (
-                  <option key={level} value={level}>
-                    {effortLabel(level)}
-                  </option>
-                ))}
+                {effortSelectUnsupported ? (
+                  <option value="">Not supported by model</option>
+                ) : (
+                  effortSelectOptions.map((level) => (
+                    <option key={level} value={level}>
+                      {effortLabel(level)}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
 
@@ -517,7 +599,9 @@ export const ObservabilityWorkspace: React.FC<ObservabilityWorkspaceProps> = ({ 
           </>
         )}
       </div>
-    </section>
+        </section>
+      )}
+    </div>
   );
 };
 

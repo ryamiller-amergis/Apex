@@ -8,11 +8,12 @@ import {
   useGlobalDefaultModel,
   useProjectApprovers,
   useSetProjectApprovers,
+  type AvailableModel,
 } from '../hooks/useProjectSkillConfig';
 import type { ProjectSkillConfig, UpsertProjectSkillConfigRequest, QuickSkillPill, QuickMcpPill, QuickMcpPillHttp, QuickMcpPillStdio, SkillProvider, InterviewSkillOption, PrototypeEngine, ProjectRepositoryReadiness } from '../../shared/types/projectSettings';
 import type { ApprovalMode, ModuleApprovalModes, ReviewerDocumentType } from '../../shared/types/approvals';
 import { EFFORT_LEVELS, type EffortLevel } from '../../shared/types/effort';
-import { effortLabel } from '../../shared/utils/effort';
+import { effortLabel, effortLevelsForModel } from '../../shared/utils/effort';
 import { sortByLabel } from '../utils/sortByLabel';
 import { useSkillRepos, useSkillBranches, useSkillList } from '../hooks/useChatThreads';
 import { useUsers } from '../hooks/useRbac';
@@ -569,7 +570,7 @@ const PipelineFlow: React.FC<PipelineFlowProps> = ({ stages }) => {
 interface InterviewOptionsEditorProps {
   options: InterviewSkillOption[];
   skillList: { id: string; path: string; name: string }[];
-  availableModels: { id: string; displayName: string }[];
+  availableModels: AvailableModel[];
   disabled: boolean;
   skillsDisabled: boolean;
   onChange: (options: InterviewSkillOption[]) => void;
@@ -689,6 +690,7 @@ const InterviewOptionsEditor: React.FC<InterviewOptionsEditorProps> = ({
             }}
             disabled={disabled}
             inheritLabel="Effort: use project default"
+            supportedLevels={effortLevelsForModel(opt.model, availableModels)}
             testId={`ps-interview-option-effort-${idx}`}
            {...{ 'data-testid': `ps-interview-option-effort-${idx}` }} />
         </div>
@@ -750,6 +752,8 @@ interface EffortSelectProps {
   onChange: (effort: EffortLevel | null) => void;
   disabled?: boolean;
   inheritLabel?: string;
+  /** Live SDK-supported effort levels for the active model; `null`/`undefined` shows all levels, `[]` means unsupported. */
+  supportedLevels?: ReadonlyArray<EffortLevel> | null;
   id?: string;
   style?: React.CSSProperties;
   testId: string;
@@ -760,24 +764,35 @@ const EffortSelect: React.FC<EffortSelectProps> = ({
   onChange,
   disabled,
   inheritLabel = 'Inherit (project default)',
+  supportedLevels,
   id,
   style,
   testId,
-}) => (
-  <select
-    id={id}
-    className={styles.select}
-    style={style}
-    value={value}
-    onChange={(e) => onChange((e.target.value as EffortLevel | '') || null)}
-    disabled={disabled}
-   {...{ 'data-testid': testId }}>
-    <option value="">{inheritLabel}</option>
-    {EFFORT_LEVELS.map((level) => (
-      <option key={level} value={level}>{effortLabel(level)}</option>
-    ))}
-  </select>
-);
+}) => {
+  const isUnsupported = supportedLevels !== null && supportedLevels !== undefined && supportedLevels.length === 0;
+  const levels: ReadonlyArray<EffortLevel> =
+    supportedLevels !== null && supportedLevels !== undefined
+      ? value && !supportedLevels.includes(value)
+        ? [...supportedLevels, value]
+        : supportedLevels
+      : EFFORT_LEVELS;
+
+  return (
+    <select
+      id={id}
+      className={styles.select}
+      style={style}
+      value={value}
+      onChange={(e) => onChange((e.target.value as EffortLevel | '') || null)}
+      disabled={disabled || (isUnsupported && !value)}
+      {...{ 'data-testid': testId }}>
+      <option value="">{isUnsupported ? 'Not supported by model' : inheritLabel}</option>
+      {levels.map((level) => (
+        <option key={level} value={level}>{effortLabel(level)}</option>
+      ))}
+    </select>
+  );
+};
 
 /** Compact effort dropdown sized for an inline pill row. */
 const PILL_CONTROL_STYLE: React.CSSProperties = {
@@ -791,7 +806,7 @@ const PILL_CONTROL_STYLE: React.CSSProperties = {
 
 interface SkillPillAddFormProps {
   skillList: { id: string; path: string; name: string }[];
-  availableModels: { id: string; displayName: string }[];
+  availableModels: AvailableModel[];
   isLoadingSkills: boolean;
   isLoadingModels: boolean;
   isPending: boolean;
@@ -897,6 +912,7 @@ const SkillPillAddForm: React.FC<SkillPillAddFormProps> = ({
             onChange={(next) => setEffort(next ?? '')}
             disabled={isPending || !hasSkillRepo}
             inheritLabel="Use default"
+            supportedLevels={effortLevelsForModel(model, availableModels)}
             testId="ps-pill-effort"
            {...{ 'data-testid': 'ps-pill-effort' }} />
         </div>
@@ -929,7 +945,7 @@ const SkillPillAddForm: React.FC<SkillPillAddFormProps> = ({
 // ── McpPillAddForm ─────────────────────────────────────────────────────────────
 
 interface McpPillAddFormProps {
-  availableModels: { id: string; displayName: string }[];
+  availableModels: AvailableModel[];
   isLoadingModels: boolean;
   isPending: boolean;
   onAdd: (pill: QuickMcpPill) => void;
@@ -1039,6 +1055,7 @@ const McpPillAddForm: React.FC<McpPillAddFormProps> = ({ availableModels, isLoad
             onChange={(next) => setEffort(next ?? '')}
             disabled={isPending}
             inheritLabel="Default effort"
+            supportedLevels={effortLevelsForModel(model, availableModels)}
             testId="ps-mcp-add-effort"
            {...{ 'data-testid': 'ps-mcp-add-effort' }} />
         </div>
@@ -1377,7 +1394,7 @@ interface PipelineStageCardProps {
   stage: PipelineStageDef;
   edit: EditState;
   skillList: { id: string; path: string; name: string }[];
-  availableModels: { id: string; displayName: string }[];
+  availableModels: AvailableModel[];
   systemDefaultModelName: string;
   expanded: boolean;
   onToggle: () => void;
@@ -1478,20 +1495,17 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
               {stage.effortKey && (
                 <div className={styles.field}>
                   <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
-                  <select
+                  <EffortSelect
                     id={`ps-${stage.effortKey}`}
-                    className={styles.select}
                     value={effortValue}
-                    onChange={(e) => onEditChange({
-                      [stage.effortKey!]: e.target.value as EffortLevel | '',
+                    onChange={(next) => onEditChange({
+                      [stage.effortKey!]: next ?? '',
                     })}
                     disabled={disabled}
-                   {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
-                    <option value="">Inherit (project default)</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
+                    supportedLevels={effortLevelsForModel(modelValue || edit.defaultModel, availableModels)}
+                    testId={`ps-stage-effort-${stage.effortKey}`}
+                    {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}
+                  />
                 </div>
               )}
             </div>
@@ -1502,20 +1516,17 @@ const PipelineStageCard: React.FC<PipelineStageCardProps> = ({
                 <div className={styles.stageFieldSingle}>
                   <div className={styles.field}>
                     <label className={styles.label} htmlFor={`ps-${stage.effortKey}`}>Effort override</label>
-                    <select
+                    <EffortSelect
                       id={`ps-${stage.effortKey}`}
-                      className={styles.select}
                       value={effortValue}
-                      onChange={(e) => onEditChange({
-                        [stage.effortKey!]: e.target.value as EffortLevel | '',
+                      onChange={(next) => onEditChange({
+                        [stage.effortKey!]: next ?? '',
                       })}
                       disabled={disabled}
-                     {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}>
-                      <option value="">Inherit (project default)</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                    </select>
+                      supportedLevels={effortLevelsForModel(modelValue || edit.defaultModel, availableModels)}
+                      testId={`ps-stage-effort-${stage.effortKey}`}
+                      {...{ 'data-testid': `ps-stage-effort-${stage.effortKey}` }}
+                    />
                   </div>
                 </div>
               )}
@@ -2471,20 +2482,18 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
                 <div className={styles.field}>
                   <label className={styles.label} htmlFor="ps-defaultEffort">Default Effort</label>
-                  <select
+                  <EffortSelect
                     id="ps-defaultEffort"
-                    className={styles.select}
                     value={edit.defaultEffort}
-                    onChange={(e) => patchEdit({
-                      defaultEffort: e.target.value as EffortLevel | '',
+                    onChange={(next) => patchEdit({
+                      defaultEffort: next ?? '',
                     })}
                     disabled={upsert.isPending}
-                   {...{ 'data-testid': 'ps-defaultEffort' }}>
-                    <option value="">Use Cursor SDK default</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
+                    inheritLabel="Use Cursor SDK default"
+                    supportedLevels={effortLevelsForModel(edit.defaultModel, availableModels)}
+                    testId="ps-defaultEffort"
+                    {...{ 'data-testid': 'ps-defaultEffort' }}
+                  />
                   <span className={styles.modelDefault}>Fallback effort for stages without a specific override</span>
                 </div>
               </div>
@@ -2593,20 +2602,17 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                 </div>
                 <div className={styles.field}>
                   <label className={styles.label} htmlFor="ps-adrEffort">ADR effort override</label>
-                  <select
+                  <EffortSelect
                     id="ps-adrEffort"
-                    className={styles.select}
                     value={edit.adrEffort}
-                    onChange={(e) => patchEdit({
-                      adrEffort: e.target.value as EffortLevel | '',
+                    onChange={(next) => patchEdit({
+                      adrEffort: next ?? '',
                     })}
                     disabled={upsert.isPending}
-                   {...{ 'data-testid': 'ps-adrEffort' }}>
-                    <option value="">Inherit (project default)</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
+                    supportedLevels={effortLevelsForModel(edit.adrModel || edit.defaultModel, availableModels)}
+                    testId="ps-adrEffort"
+                    {...{ 'data-testid': 'ps-adrEffort' }}
+                  />
                 </div>
               </div>
               <div className={styles.stageList}>
@@ -3110,6 +3116,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           }}
                           disabled={upsert.isPending}
                           inheritLabel="Default effort"
+                          supportedLevels={effortLevelsForModel(pill.model || edit.defaultModel, availableModels)}
                           testId={`ps-skill-pill-effort-${idx}`}
                          {...{ 'data-testid': `ps-skill-pill-effort-${idx}` }} />
                         <button
@@ -3263,6 +3270,7 @@ export const AdminProjectSettings: React.FC<AdminProjectSettingsProps> = ({
                           }}
                           disabled={upsert.isPending}
                           inheritLabel="Default effort"
+                          supportedLevels={effortLevelsForModel(pill.model || edit.defaultModel, availableModels)}
                           testId={`ps-mcp-pill-effort-${idx}`}
                          {...{ 'data-testid': `ps-mcp-pill-effort-${idx}` }} />
                         <button

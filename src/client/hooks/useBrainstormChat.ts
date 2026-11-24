@@ -43,6 +43,8 @@ export function useBrainstormChat(
   }, [client, project, sessionId]);
 
   return useAgentChatSession(session?.threadId ?? null, {
+    harnessArea: 'brainstorm',
+    area: 'brainstorm',
     locked: !session?.canMutate,
     sendEndpoint: endpoints.sendEndpoint,
     cancelEndpoint: endpoints.cancelEndpoint,

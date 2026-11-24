@@ -41,7 +41,6 @@ import {
 import { ConfirmDeleteModal } from './ConfirmDeleteModal';
 import { BuildBriefReview } from './BuildBriefReview';
 import { InterviewBriefReview } from './InterviewBriefReview';
-import { ChatRunProgressLabel } from './ChatRunProgressLabel';
 import { SectionOwnerModal } from './SectionOwnerModal';
 import { useGroundingResumeGate } from '../hooks/useGroundingResumeGate';
 import type { PipelinePinPolicy } from '../../shared/types/runGrounding';
@@ -86,7 +85,8 @@ import {
   LinkedContextPicker,
   type StagedLinkedContextSelection,
 } from './LinkedContextPicker';
-import { AgentComposer } from './agentChat';
+import { AgentHarnessPanel, AgentRunStatusText, AgentThoughtProcess } from './agentChat';
+import type { HarnessTranscriptItem } from '../chatHarness/types';
 import { ApexLoader } from './ApexLoader';
 import { ArtifactUsageStrip } from './ArtifactUsageStrip';
 import { useBrainstormInterviewSource, useRecordBrainstormInterview } from '../hooks/useBrainstormInterviewHandoff';
@@ -687,17 +687,44 @@ const NewInterviewCompose: React.FC = () => {
           });
         }
       }
-      await fetch(`/api/chat/threads/${threadResult.threadId}/messages`, {
+      const kickoffRes = await fetch(`/api/harness/threads/${threadResult.threadId}/commands`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          turnId: createChatTurnId(),
+          commandId: createChatTurnId(),
+          kind: 'send',
           text: text || 'Please use the attached files as context.',
-          attachments,
-          model,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          ...(model ? { model } : {}),
         }),
       });
+      if (!kickoffRes.ok) {
+        let kickoffError = 'Failed to send the initial interview message.';
+        try {
+          const body = (await kickoffRes.json()) as { error?: unknown };
+          if (typeof body?.error === 'string' && body.error.trim()) {
+            kickoffError = body.error.trim();
+          }
+        } catch {
+          /* keep default */
+        }
+        throw new Error(kickoffError);
+      }
+      try {
+        const receipt = (await kickoffRes.json()) as { status?: unknown; reason?: unknown };
+        if (receipt?.status === 'rejected') {
+          throw new Error(
+            typeof receipt.reason === 'string' && receipt.reason.trim()
+              ? receipt.reason.trim()
+              : 'Failed to send the initial interview message.',
+          );
+        }
+      } catch (parseErr: unknown) {
+        if (parseErr instanceof Error && parseErr.message && parseErr.name !== 'SyntaxError') {
+          throw parseErr;
+        }
+      }
       clearAttachments();
       if (linkedContextInitialErrorText) {
         navigate(`/backlog/interview/${result.interviewId}`, {
@@ -1223,7 +1250,11 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isError: isChatThreadError,
   } = useChatThread(interview?.chatThreadId ?? null);
 
+  const harnessArea = isBuildIntake ? 'build-intake' : 'interview';
   const session = useAgentChatSession(interview?.chatThreadId ?? null, {
+    area: harnessArea,
+    harnessArea,
+    projectId: interview?.project ?? null,
     initialMessages: chatThread?.messages,
     initialStatus: chatThread?.status,
     initialActiveRunId: chatThread?.activeRunId,
@@ -1242,10 +1273,8 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
     isRunning,
     isSending,
     isRetrying,
-    retryReason,
     progressLabel,
     progressPhase,
-    toolProgress,
     isPreparing: isPreparingInterview,
     hasPreparationError,
     isInteractionBusy,
@@ -1747,7 +1776,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             </div>
             <ArtifactUsageStrip
               endpoint={`/api/interviews/${interview.id}/usage`}
-              visible={interview.status === 'complete'}
+              visible={Boolean(interview.id)}
             />
             {!isBuildIntake && (interview.prdOwnerName || interview.designDocOwnerName || interview.designPrototypeOwnerName || interview.testCaseOwnerName) && (
               <div className={styles.ownerChips} {...{ 'data-testid': 'interview-owner-chips' }}>
@@ -1921,10 +1950,10 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         </div>
       </div>
 
-      {(sendError || prdGenError || (!repoReadiness.isReady && repoReadiness.message)) && (
+      {(sendError || session.lastFailure?.reason || prdGenError || (!repoReadiness.isReady && repoReadiness.message)) && (
         <div className={styles.sendError} {...{ 'data-testid': 'interview-repo-not-ready' }}>
-          {sendError ?? prdGenError ?? repoReadiness.message}
-          {(sendError || prdGenError) && (
+          {sendError ?? session.lastFailure?.reason ?? prdGenError ?? repoReadiness.message}
+          {(sendError || session.lastFailure?.reason || prdGenError) && (
             <button
               type="button"
               className={styles.sendErrorDismiss}
@@ -1987,189 +2016,434 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
         />
       )}
 
-      <div className={styles.messages}>
-        <div
-          className={styles.messageList}
-          {...(isBuildIntake ? { 'aria-live': 'polite' as const, 'aria-relevant': 'additions' as const } : {})}
-        >
-          {hasPreparationError && (
-            <div className={styles.preparationState} role="alert">
-              <div className={styles.preparationErrorIcon}>!</div>
-              <h2 className={styles.preparationTitle}>Unable to prepare this interview</h2>
-              <p className={styles.preparationDetail}>
-                {chatThread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
-              </p>
-            </div>
-          )}
-
-          {isPreparingInterview && (
+      <AgentHarnessPanel
+        area={harnessArea}
+        session={{
+          ...session,
+          snapshotLoaded:
+            isPreparingInterview || hasPreparationError || Boolean(chatThread)
+              ? true
+              : session.snapshotLoaded,
+        }}
+        items={visibleMessages}
+        testIdPrefix="interview"
+        testIds={{
+          root: 'interview-harness-panel',
+          progress: 'interview-agent-processing',
+          progressLabel: 'interview-progress-label',
+          busy: 'chat-run-spinner',
+          composer: 'interview-chat-composer',
+          composerInput: 'interview-message-input',
+          composerSend: 'interview-send-message',
+          composerStop: 'interview-stop-agent',
+        }}
+        fallbackProgressLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
+        draft={input}
+        onDraftChange={setInput}
+        onSend={(text) => {
+          if (contextEstimate.isCritical) {
+            setShowSendConfirm(true);
+            return;
+          }
+          void sendMessageToAgent(text, true);
+        }}
+        onCancel={() => void session.cancel()}
+        onRetry={() => handleRetryLast()}
+        locked={isComposerLocked}
+        renderTranscript={({ liveWorkBox }) => (
+          <div className={styles.messages}>
             <div
-              className={styles.preparationState}
-              {...{ 'data-testid': 'interview-preparation-state' }}
+              className={styles.messageList}
+              {...(isBuildIntake ? { 'aria-live': 'polite' as const, 'aria-relevant': 'additions' as const } : {})}
             >
-              <div className={styles.preparationSpinner} />
-              <h2 className={styles.preparationTitle}>Preparing your interview</h2>
-              <p
-                className={styles.preparationDetail}
-                role="status"
-                aria-live="polite"
-                {...{ 'data-testid': 'agent-run-status-label' }}
-              >
-                {progressPhase === 'queued' ? (
-                  <span {...{ 'data-testid': 'agent-run-status-queued' }}>
-                    Queued
-                  </span>
-                ) : progressPhase === 'dispatched' ? (
-                  <span {...{ 'data-testid': 'agent-run-status-dispatched' }}>
-                    Dispatched
-                  </span>
-                ) : progressLabel ? (
-                  friendlyChatProgressLabel(progressLabel, progressPhase)
-                ) : isChatThreadError ? (
-                  'The interview service is reconnecting after a temporary interruption…'
-                ) : isChatThreadLoading ? (
-                  'Connecting to the interview service…'
-                ) : (
-                  friendlyChatProgressLabel(
-                    'Getting the latest repository requirements so your interview starts with current context…',
-                    'setup'
-                  )
-                )}
-              </p>
-            </div>
-          )}
+              {hasPreparationError && (
+                <div className={styles.preparationState} role="alert">
+                  <div className={styles.preparationErrorIcon}>!</div>
+                  <h2 className={styles.preparationTitle}>Unable to prepare this interview</h2>
+                  <p className={styles.preparationDetail}>
+                    {chatThread?.lastError ?? 'Repository preparation was interrupted. Try sending your message again.'}
+                  </p>
+                </div>
+              )}
 
-          {visibleMessages.map((msg, msgIndex) => {
-            if (msg.role === 'tool') {
-              return (
-                <div key={msg.id} className={styles.messageBubbleTool}>→ {msg.text}</div>
-              );
-            }
-            if (msg.role === 'system') {
-              const isError = msg.text.startsWith('Error:');
-              if (isError && !isChatLocked) {
-                return (
-                  <div key={msg.id} className={styles.systemErrorMsg}>
-                    <span
-                      className={styles.systemErrorText}
-                      role="alert"
-                      {...{ 'data-testid': 'chat-run-terminal' }}
-                    >
+              {isPreparingInterview && (
+                <div
+                  className={styles.preparationState}
+                  {...{ 'data-testid': 'interview-preparation-state' }}
+                >
+                  <div className={styles.preparationSpinner} />
+                  <h2 className={styles.preparationTitle}>Preparing your interview</h2>
+                  <p
+                    className={styles.preparationDetail}
+                    role="status"
+                    aria-live="polite"
+                    {...{ 'data-testid': 'agent-run-status-label' }}
+                  >
+                    {progressPhase === 'queued' || progressPhase === 'dispatched' || progressLabel ? (
+                      <AgentRunStatusText
+                        progressPhase={progressPhase}
+                        progressLabel={progressLabel}
+                        showElapsedAndSteps={false}
+                      />
+                    ) : isChatThreadError ? (
+                      'The interview service is reconnecting after a temporary interruption…'
+                    ) : isChatThreadLoading ? (
+                      'Connecting to the interview service…'
+                    ) : (
+                      friendlyChatProgressLabel(
+                        'Getting the latest repository requirements so your interview starts with current context…',
+                        'setup'
+                      )
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {visibleMessages.map((msg, msgIndex) => {
+                if (msg.role === 'tool') {
+                  return (
+                    <div key={msg.id} className={styles.messageBubbleTool}>→ {msg.text}</div>
+                  );
+                }
+                if (msg.role === 'system') {
+                  const isError = msg.text.startsWith('Error:');
+                  if (isError && !isChatLocked) {
+                    return (
+                      <div key={msg.id} className={styles.systemErrorMsg}>
+                        <span
+                          className={styles.systemErrorText}
+                          role="alert"
+                          {...{ 'data-testid': 'chat-run-terminal' }}
+                        >
+                          {msg.text}
+                        </span>
+                        <button
+                          className={styles.retryBtn}
+                          onClick={() => handleRetryLast()}
+                          disabled={isInteractionBusy || !session.retryableRunId}
+                          type="button"
+                          {...{ 'data-testid': 'interview-retry-message' }}
+                        >
+                          ↺ Try again
+                        </button>
+                      </div>
+                    );
+                  }
+                  return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
+                }
+                if (msg.role === 'user') {
+                  return (
+                    <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>
                       {msg.text}
-                    </span>
+                    </div>
+                  );
+                }
+                const harnessItem = msg as HarnessTranscriptItem;
+                return (
+                  <React.Fragment key={msg.id}>
+                    {harnessItem.activity?.length || harnessItem.activityUnavailable ? (
+                      <AgentThoughtProcess
+                        items={harnessItem.activity}
+                        isUnavailable={harnessItem.activityUnavailable}
+                        testIdPrefix="interview"
+                        testIds={{
+                          drawer: 'interview-thought-process',
+                          toggle: 'interview-thought-process-toggle',
+                          thinking: `interview-saved-thinking-${msg.id}`,
+                          steps: `interview-saved-steps-${msg.id}`,
+                          toolGroup: `interview-saved-tool-group-${msg.id}`,
+                        }}
+                      />
+                    ) : null}
+                    <InterviewAgentMessage
+                      text={msg.text}
+                      onSend={(text) => {
+                        if (isComposerLocked) return;
+                        const order = messageQOffsets.get(msg.id) ?? msgIndex;
+                        // Don't start a run while a later question is still open —
+                        // hold this answer and send it together once the last
+                        // outstanding visible question is actually answered.
+                        const hasLaterUnanswered = visibleMessages.some((other, otherIndex) =>
+                          otherIndex > msgIndex
+                          && other.role === 'agent'
+                          && (messageChoiceBlocks.get(other.id)?.length ?? 0) > 0
+                          && !isChoiceMessageAnswered(other.id, otherIndex),
+                        );
+                        if (hasLaterUnanswered) {
+                          setHeldChoiceAnswers((prev) => [
+                            ...prev.filter((held) => held.messageId !== msg.id),
+                            { messageId: msg.id, order, text },
+                          ]);
+                          return;
+                        }
+                        const combinedText = [
+                          ...heldChoiceAnswers,
+                          { messageId: msg.id, order, text },
+                        ]
+                          .sort((a, b) => a.order - b.order)
+                          .map((held) => held.text)
+                          .join('\n\n');
+                        setHeldChoiceAnswers([]);
+                        void sendMessageToAgent(combinedText, false);
+                      }}
+                      isRunning={isInteractionBusy}
+                      questionOffset={messageQOffsets.get(msg.id) ?? 0}
+                      interviewLocked={isComposerLocked}
+                      actions={showMessageThumbs ? (
+                        <InterviewMessageThumbs
+                          messageId={msg.id}
+                          rating={myMessageRatings.get(msg.id) ?? null}
+                          disabled={isStatusLocked || putMessageFeedback.isPending}
+                          onRate={(rating) => putMessageFeedback.mutate({ messageId: msg.id, rating })}
+                        />
+                      ) : undefined}
+                      alreadyAnswered={isChoiceMessageAnswered(msg.id, msgIndex)}
+                      fullWidth={msgIndex > lastUserMsgIndex}
+                      anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
+                    />
+                  </React.Fragment>
+                );
+              })}
+
+              {!isPreparingInterview &&
+                (showTypingIndicator || isRetrying || (session.activity?.length ?? 0) > 0) &&
+                liveWorkBox}
+
+              {visibleStreamingText && (
+                <div
+                  className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}
+                  {...(isBuildIntake ? { 'aria-hidden': true } : {})}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleStreamingText}</ReactMarkdown>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+        )}
+        slots={{
+          composerAccessory: !isComposerLocked ? (
+            <>
+              {/* @feature-flag:skill-learning */}
+              {showTechnicalFeedbackPrompt && (
+                <div className={styles.technicalFeedbackPrompt} {...{ 'data-testid': 'interview-technical-feedback-prompt' }}>
+                  <span>Rate the Technical phase before this interview can be completed.</span>
+                  <button
+                    type="button"
+                    className={styles.technicalFeedbackToggle}
+                    aria-expanded={technicalFeedbackOpen}
+                    onClick={() => setTechnicalFeedbackOpen((open) => !open)}
+                    {...{ 'data-testid': 'interview-technical-feedback-toggle' }}
+                  >
+                    {technicalFeedbackOpen ? 'Hide' : 'Rate Technical'}
+                  </button>
+                </div>
+              )}
+              {showTechnicalFeedbackPrompt && technicalFeedbackOpen && (
+                <InterviewPhaseFeedbackPanel
+                  project={interview.project}
+                  interviewId={interview.id}
+                  phases={[3]}
+                  title="Rate the Technical phase"
+                  intro="Your feedback improves the AI over time. The interview can be completed once you rate it."
+                  testIdPrefix="interview-technical-feedback"
+                  data-testid="interview-technical-feedback-panel"
+                />
+              )}
+              <div className={styles.contextBar}>
+                <div
+                  className={styles.contextBarTrack}
+                  title={`Estimated context: ${contextEstimate.estimatedTokens.toLocaleString()} / ${contextEstimate.contextLimit.toLocaleString()} tokens`}
+                >
+                  <div
+                    className={`${styles.contextBarFill} ${contextEstimate.isCritical ? styles.contextBarFillCritical : contextEstimate.isWarning ? styles.contextBarFillWarn : ''}`}
+                    style={{ width: `${contextEstimate.usagePercent}%` }}
+                  />
+                </div>
+                <span className={`${styles.contextBarLabel} ${contextEstimate.isWarning ? styles.contextBarLabelWarn : ''}`}>
+                  {contextEstimate.label} / {contextEstimate.contextLimit >= 1000 ? `${Math.round(contextEstimate.contextLimit / 1000)}k` : contextEstimate.contextLimit}
+                  {contextEstimate.isWarning && ' ⚠'}
+                </span>
+              </div>
+
+              {contextEstimate.isCritical && !isBuildIntake && (
+                <div className={styles.wrapUpBannerCritical}>
+                  <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <div className={styles.wrapUpBody}>
+                    <strong>Context window is nearly full.</strong> To ensure all your Q&amp;A is preserved in the PRD, we strongly recommend generating now.
+                    {canCompleteInterview && (
+                    <div className={styles.wrapUpActions}>
+                      <button
+                        className={styles.wrapUpGenerateBtn}
+                        onClick={requestGeneratePrd}
+                        disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
+                        type="button"
+                        {...{ 'data-testid': 'interview-context-generate-prd-critical' }}
+                      >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="1" width="10" height="14" rx="1.5" />
+                          <path d="M6 5h4M6 8h4M6 11h2" />
+                        </svg>
+                        Generate PRD Now
+                      </button>
+                    </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && !isBuildIntake && (
+                <div className={styles.wrapUpBannerWarn}>
+                  <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <div className={styles.wrapUpBody}>
+                    You've covered a lot of ground. Consider wrapping up the interview and generating your PRD to preserve all context.
+                    <div className={styles.wrapUpActions}>
+                      {canCompleteInterview && (
+                      <button
+                        className={styles.wrapUpGenerateBtn}
+                        onClick={requestGeneratePrd}
+                        disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
+                        type="button"
+                        {...{ 'data-testid': 'interview-context-generate-prd-warning' }}
+                      >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="1" width="10" height="14" rx="1.5" />
+                          <path d="M6 5h4M6 8h4M6 11h2" />
+                        </svg>
+                        Generate PRD Now
+                      </button>
+                      )}
+                      <button
+                        className={styles.wrapUpDismissBtn}
+                        onClick={() => setWrapUpDismissed(true)}
+                        type="button"
+                        {...{ 'data-testid': 'interview-context-dismiss-warning' }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : undefined,
+        }}
+        composer={{
+          hideComposer: isComposerLocked,
+          disabled:
+            isPreparingInterview ||
+            isSending ||
+            (!session.isSteerSupported && isInteractionBusy) ||
+            resumeGate.composerBlocked,
+          placeholder: isPreparingInterview
+            ? 'Preparing the latest requirements…'
+            : isAgentProcessing
+              ? (session.isSteerSupported ? 'Send a follow-up while the agent works…' : 'Agent is thinking…')
+              : 'Continue the interview… (Enter to send)',
+          allowEmptySend: true,
+          textareaRef,
+          attachments,
+          attachmentError,
+          onRemoveAttachment: removeAttachment,
+          onAttachClick: isBuildIntake ? undefined : () => fileInputRef.current?.click(),
+          onPasteFiles: isBuildIntake ? undefined : (files) => { void addFiles(files); },
+          speech: isBuildIntake ? undefined : {
+            isListening: speech.isListening,
+            isSpeechSupported: speech.isSpeechSupported,
+            speechError: speech.speechError,
+            onToggle: () => speech.toggle(input),
+          },
+          model,
+          models: availableModels,
+          modelsLoading,
+          onModelChange: setModel,
+          onKeyDown: (event) => {
+            if (
+              event.key === 'Enter'
+              && !event.shiftKey
+              && !isRunning
+              && contextEstimate.isCritical
+              && (input.trim().length > 0 || attachments.length > 0)
+            ) {
+              event.preventDefault();
+              setShowSendConfirm(true);
+            }
+          },
+          fileInput: !isBuildIntake ? (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
+              className={styles.fileInput}
+              onChange={handleAttachmentChange}
+              disabled={isInteractionBusy || isSending}
+              {...{ 'data-testid': 'interview-file-input' }}
+            />
+          ) : undefined,
+          sendButton: (
+            <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>
+              {showSendConfirm && (
+                <div className={styles.sendConfirmOverlay}>
+                  <div className={styles.sendConfirmText}>
+                    The context window is nearly full. Sending more messages may degrade the agent&apos;s ability to process the conversation. Continue anyway?
+                  </div>
+                  <div className={styles.sendConfirmActions}>
                     <button
-                      className={styles.retryBtn}
-                      onClick={() => handleRetryLast()}
-                      disabled={isInteractionBusy || !session.retryableRunId}
+                      className={styles.sendConfirmNo}
+                      onClick={() => setShowSendConfirm(false)}
                       type="button"
-                      {...{ 'data-testid': 'interview-retry-message' }}
+                      {...{ 'data-testid': 'interview-send-confirm-cancel' }}
                     >
-                      ↺ Try again
+                      Cancel
+                    </button>
+                    <button
+                      className={styles.sendConfirmYes}
+                      onClick={() => {
+                        setShowSendConfirm(false);
+                        void handleSend();
+                      }}
+                      type="button"
+                      {...{ 'data-testid': 'interview-send-confirm-submit' }}
+                    >
+                      Send anyway
                     </button>
                   </div>
-                );
-              }
-              return <div key={msg.id} className={styles.messageBubbleSystem}>{msg.text}</div>;
-            }
-            if (msg.role === 'user') {
-              return (
-                <div key={msg.id} className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>
-                  {msg.text}
                 </div>
-              );
-            }
-            return (
-              <InterviewAgentMessage
-                key={msg.id}
-                text={msg.text}
-                onSend={(text) => {
-                  if (isComposerLocked) return;
-                  const order = messageQOffsets.get(msg.id) ?? msgIndex;
-                  // Don't start a run while a later question is still open —
-                  // hold this answer and send it together once the last
-                  // outstanding visible question is actually answered.
-                  const hasLaterUnanswered = visibleMessages.some((other, otherIndex) =>
-                    otherIndex > msgIndex
-                    && other.role === 'agent'
-                    && (messageChoiceBlocks.get(other.id)?.length ?? 0) > 0
-                    && !isChoiceMessageAnswered(other.id, otherIndex),
-                  );
-                  if (hasLaterUnanswered) {
-                    setHeldChoiceAnswers((prev) => [
-                      ...prev.filter((held) => held.messageId !== msg.id),
-                      { messageId: msg.id, order, text },
-                    ]);
-                    return;
+              )}
+              <button
+                className={styles.sendBtn}
+                onClick={() => {
+                  if (contextEstimate.isCritical) {
+                    setShowSendConfirm(true);
+                  } else {
+                    void handleSend();
                   }
-                  const combinedText = [
-                    ...heldChoiceAnswers,
-                    { messageId: msg.id, order, text },
-                  ]
-                    .sort((a, b) => a.order - b.order)
-                    .map((held) => held.text)
-                    .join('\n\n');
-                  setHeldChoiceAnswers([]);
-                  void sendMessageToAgent(combinedText, false);
                 }}
-                isRunning={isInteractionBusy}
-                questionOffset={messageQOffsets.get(msg.id) ?? 0}
-                interviewLocked={isComposerLocked}
-                actions={showMessageThumbs ? (
-                  <InterviewMessageThumbs
-                    messageId={msg.id}
-                    rating={myMessageRatings.get(msg.id) ?? null}
-                    disabled={isStatusLocked || putMessageFeedback.isPending}
-                    onRate={(rating) => putMessageFeedback.mutate({ messageId: msg.id, rating })}
-                  />
-                ) : undefined}
-                alreadyAnswered={isChoiceMessageAnswered(msg.id, msgIndex)}
-                fullWidth={msgIndex > lastUserMsgIndex}
-                anchorRef={msgIndex === visibleMessages.length - 1 ? activeQuestionRef : undefined}
-              />
-            );
-          })}
-
-          {isRetrying && (
-            <div className={styles.retryingIndicator}>
-              <span className={styles.retryingSpinner} />
-              {retryReason || 'Retrying…'}
+                disabled={
+                  (!input.trim() && attachments.length === 0)
+                  || isInteractionBusy
+                  || !repoReadiness.isReady
+                  || resumeGate.composerBlocked
+                }
+                type="button"
+                aria-label="Send"
+                {...{ 'data-testid': 'interview-send-message' }}
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                </svg>
+              </button>
             </div>
-          )}
-
-          {showTypingIndicator && (
-            <div
-              className={styles.typingIndicator}
-              role="status"
-              aria-live="polite"
-              aria-label={friendlyChatProgressLabel(progressLabel, progressPhase) || 'Agent is processing your response'}
-              {...{ 'data-testid': 'interview-agent-processing' }}
-            >
-              <span aria-hidden="true" {...{ 'data-testid': 'chat-run-spinner' }} />
-              <span className={styles.typingDot} />
-              <span className={styles.typingDot} />
-              <span className={styles.typingDot} />
-              <span className={styles.typingProgressLabel} {...{ 'data-testid': 'interview-progress-label' }}>
-                <ChatRunProgressLabel
-                  fallbackLabel={friendlyChatProgressLabel(progressLabel, progressPhase)}
-                  progressPhase={progressPhase}
-                  toolProgress={toolProgress}
-                />
-              </span>
-            </div>
-          )}
-
-          {visibleStreamingText && (
-            <div
-              className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}
-              {...(isBuildIntake ? { 'aria-hidden': true } : {})}
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{visibleStreamingText}</ReactMarkdown>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
+          ),
+        }}
+        {...{ 'data-testid': 'interview-harness-panel' }}
+      />
 
       {buildIntakePaused ? (
         <div className={styles.lockedNotice} role="status" {...{ 'data-testid': 'build-intake-paused-notice' }}>
@@ -2221,230 +2495,7 @@ export const ExistingInterviewView: React.FC<{ id: string }> = ({ id }) => {
             <span>Waiting for {baName} to rate {baPhaseLabels}. The chat reopens after that.</span>
           </div>
         )
-      ) : (
-        <div className={styles.inputArea}>
-          {/* @feature-flag:skill-learning */}
-          {showTechnicalFeedbackPrompt && (
-            <div className={styles.technicalFeedbackPrompt} {...{ 'data-testid': 'interview-technical-feedback-prompt' }}>
-              <span>Rate the Technical phase before this interview can be completed.</span>
-              <button
-                type="button"
-                className={styles.technicalFeedbackToggle}
-                aria-expanded={technicalFeedbackOpen}
-                onClick={() => setTechnicalFeedbackOpen((open) => !open)}
-                {...{ 'data-testid': 'interview-technical-feedback-toggle' }}
-              >
-                {technicalFeedbackOpen ? 'Hide' : 'Rate Technical'}
-              </button>
-            </div>
-          )}
-          {showTechnicalFeedbackPrompt && technicalFeedbackOpen && (
-            <InterviewPhaseFeedbackPanel
-              project={interview.project}
-              interviewId={interview.id}
-              phases={[3]}
-              title="Rate the Technical phase"
-              intro="Your feedback improves the AI over time. The interview can be completed once you rate it."
-              testIdPrefix="interview-technical-feedback"
-              data-testid="interview-technical-feedback-panel"
-            />
-          )}
-          <div className={styles.contextBar}>
-            <div
-              className={styles.contextBarTrack}
-              title={`Estimated context: ${contextEstimate.estimatedTokens.toLocaleString()} / ${contextEstimate.contextLimit.toLocaleString()} tokens`}
-            >
-              <div
-                className={`${styles.contextBarFill} ${contextEstimate.isCritical ? styles.contextBarFillCritical : contextEstimate.isWarning ? styles.contextBarFillWarn : ''}`}
-                style={{ width: `${contextEstimate.usagePercent}%` }}
-              />
-            </div>
-            <span className={`${styles.contextBarLabel} ${contextEstimate.isWarning ? styles.contextBarLabelWarn : ''}`}>
-              {contextEstimate.label} / {contextEstimate.contextLimit >= 1000 ? `${Math.round(contextEstimate.contextLimit / 1000)}k` : contextEstimate.contextLimit}
-              {contextEstimate.isWarning && ' ⚠'}
-            </span>
-          </div>
-
-          {contextEstimate.isCritical && !isBuildIntake && (
-            <div className={styles.wrapUpBannerCritical}>
-              <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              <div className={styles.wrapUpBody}>
-                <strong>Context window is nearly full.</strong> To ensure all your Q&amp;A is preserved in the PRD, we strongly recommend generating now.
-                {canCompleteInterview && (
-                <div className={styles.wrapUpActions}>
-                  <button
-                    className={styles.wrapUpGenerateBtn}
-                    onClick={requestGeneratePrd}
-                    disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
-                    type="button"
-                    {...{ 'data-testid': 'interview-context-generate-prd-critical' }}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="1" width="10" height="14" rx="1.5" />
-                      <path d="M6 5h4M6 8h4M6 11h2" />
-                    </svg>
-                    Generate PRD Now
-                  </button>
-                </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {contextEstimate.isNearLimit && !contextEstimate.isCritical && !wrapUpDismissed && !isBuildIntake && (
-            <div className={styles.wrapUpBannerWarn}>
-              <svg className={styles.wrapUpIcon} viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              <div className={styles.wrapUpBody}>
-                You've covered a lot of ground. Consider wrapping up the interview and generating your PRD to preserve all context.
-                <div className={styles.wrapUpActions}>
-                  {canCompleteInterview && (
-                  <button
-                    className={styles.wrapUpGenerateBtn}
-                    onClick={requestGeneratePrd}
-                    disabled={startChat.isPending || createPrd.isPending || interview.prds.length > 0}
-                    type="button"
-                    {...{ 'data-testid': 'interview-context-generate-prd-warning' }}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="1" width="10" height="14" rx="1.5" />
-                      <path d="M6 5h4M6 8h4M6 11h2" />
-                    </svg>
-                    Generate PRD Now
-                  </button>
-                  )}
-                  <button
-                    className={styles.wrapUpDismissBtn}
-                    onClick={() => setWrapUpDismissed(true)}
-                    type="button"
-                    {...{ 'data-testid': 'interview-context-dismiss-warning' }}
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-          {!isBuildIntake && (
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*"
-              className={styles.fileInput}
-              onChange={handleAttachmentChange}
-              disabled={isInteractionBusy || isSending}
-              {...{ 'data-testid': 'interview-file-input' }}
-            />
-          )}
-          <AgentComposer
-            className={styles.composerEmbed}
-            shellClassName={styles.interviewComposerShell}
-            value={input}
-            onChange={setInput}
-            onSend={() => {
-              if (contextEstimate.isCritical) {
-                setShowSendConfirm(true);
-              } else {
-                void handleSend();
-              }
-            }}
-            onCancel={() => void session.cancel()}
-            disabled={isInteractionBusy || isSending || resumeGate.composerBlocked}
-            isRunning={isRunning}
-            isSending={isSending}
-            isBusy={isInteractionBusy}
-            isCancelling={session.isCancelling}
-            placeholder={isPreparingInterview
-              ? 'Preparing the latest requirements…'
-              : isAgentProcessing
-                ? 'Agent is thinking…'
-                : 'Continue the interview… (Enter to send)'}
-            testIdPrefix="interview"
-            testIds={{
-              input: 'interview-message-input',
-              send: 'interview-send-message',
-              stop: 'interview-stop-agent',
-            }}
-            {...{ 'data-testid': 'interview-chat-composer' }}
-            allowEmptySend
-            textareaRef={textareaRef}
-            attachments={attachments}
-            attachmentError={attachmentError}
-            onRemoveAttachment={removeAttachment}
-            onAttachClick={isBuildIntake ? undefined : () => fileInputRef.current?.click()}
-            onPasteFiles={isBuildIntake ? undefined : (files) => { void addFiles(files); }}
-            speech={isBuildIntake ? undefined : {
-              isListening: speech.isListening,
-              isSpeechSupported: speech.isSpeechSupported,
-              speechError: speech.speechError,
-              onToggle: () => speech.toggle(input),
-            }}
-            model={model}
-            models={availableModels}
-            modelsLoading={modelsLoading}
-            onModelChange={setModel}
-            sendButton={(
-              <div className={contextEstimate.isCritical ? styles.sendBtnCritical : undefined}>
-                {showSendConfirm && (
-                  <div className={styles.sendConfirmOverlay}>
-                    <div className={styles.sendConfirmText}>
-                      The context window is nearly full. Sending more messages may degrade the agent&apos;s ability to process the conversation. Continue anyway?
-                    </div>
-                    <div className={styles.sendConfirmActions}>
-                      <button
-                        className={styles.sendConfirmNo}
-                        onClick={() => setShowSendConfirm(false)}
-                        type="button"
-                        {...{ 'data-testid': 'interview-send-confirm-cancel' }}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className={styles.sendConfirmYes}
-                        onClick={() => {
-                          setShowSendConfirm(false);
-                          void handleSend();
-                        }}
-                        type="button"
-                        {...{ 'data-testid': 'interview-send-confirm-submit' }}
-                      >
-                        Send anyway
-                      </button>
-                    </div>
-                  </div>
-                )}
-                <button
-                  className={styles.sendBtn}
-                  onClick={() => {
-                    if (contextEstimate.isCritical) {
-                      setShowSendConfirm(true);
-                    } else {
-                      void handleSend();
-                    }
-                  }}
-                  disabled={
-                    (!input.trim() && attachments.length === 0)
-                    || isInteractionBusy
-                    || !repoReadiness.isReady
-                    || resumeGate.composerBlocked
-                  }
-                  type="button"
-                  aria-label="Send"
-                  {...{ 'data-testid': 'interview-send-message' }}
-                >
-                  <svg viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                  </svg>
-                </button>
-              </div>
-            )}
-          />
-        </div>
-      )}
+      ) : null}
 
       {showLinkedContext && (
         <div

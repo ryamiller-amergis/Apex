@@ -93,6 +93,8 @@ export type PreparedDurableInteractiveTurn = Readonly<{
   hidden: boolean;
   attachments: ReadonlyArray<ImmutableInteractiveAttachmentRef>;
   specification: DurableInteractiveTurnSpecification;
+  /** Operation turns (e.g. 'summarize') admit a run without inserting a user chat_messages row. */
+  skipMessageInsert?: boolean;
 }>;
 
 export type AdmitDurableInteractiveTurnResult =
@@ -377,49 +379,55 @@ export function createDurableInteractiveTurnRepository(options?: {
         const dispatchMessageId = newId();
         const eventId = newId();
 
-        await executor.execute(sql`
-          INSERT INTO chat_messages (
-            id,
-            thread_id,
-            role,
-            text,
-            hidden,
-            ts
-          ) VALUES (
-            ${input.turnId}::uuid,
-            ${input.threadId}::uuid,
-            'user',
-            ${input.messageText},
-            ${input.hidden},
-            ${acceptedAt}::timestamptz
-          )
-        `);
-        await afterWrite('message');
+        const skipMessageInsert =
+          input.skipMessageInsert === true ||
+          input.specification.harness?.operation === 'summarize';
 
-        for (const attachment of input.attachments) {
+        if (!skipMessageInsert) {
           await executor.execute(sql`
-            INSERT INTO chat_message_attachments (
+            INSERT INTO chat_messages (
               id,
-              message_id,
-              name,
-              type,
-              size,
-              path,
-              blob_ref,
-              sha256
+              thread_id,
+              role,
+              text,
+              hidden,
+              ts
             ) VALUES (
-              ${attachment.attachmentId}::uuid,
               ${input.turnId}::uuid,
-              ${attachment.name},
-              ${attachment.contentType},
-              ${attachment.sizeBytes},
-              ${attachment.materializedPath},
-              ${JSON.stringify(attachment.blobRef)}::jsonb,
-              ${attachment.sha256}
+              ${input.threadId}::uuid,
+              'user',
+              ${input.messageText},
+              ${input.hidden},
+              ${acceptedAt}::timestamptz
             )
           `);
+          await afterWrite('message');
+
+          for (const attachment of input.attachments) {
+            await executor.execute(sql`
+              INSERT INTO chat_message_attachments (
+                id,
+                message_id,
+                name,
+                type,
+                size,
+                path,
+                blob_ref,
+                sha256
+              ) VALUES (
+                ${attachment.attachmentId}::uuid,
+                ${input.turnId}::uuid,
+                ${attachment.name},
+                ${attachment.contentType},
+                ${attachment.sizeBytes},
+                ${attachment.materializedPath},
+                ${JSON.stringify(attachment.blobRef)}::jsonb,
+                ${attachment.sha256}
+              )
+            `);
+          }
+          await afterWrite('attachments');
         }
-        await afterWrite('attachments');
 
         await executor.execute(sql`
           INSERT INTO agent_runs (

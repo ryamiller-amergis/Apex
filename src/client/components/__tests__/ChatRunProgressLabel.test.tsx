@@ -14,7 +14,7 @@ describe('ChatRunProgressLabel', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('keeps the single-word status while queued', () => {
+  it('keeps the single-word friendly status while queued', () => {
     render(
       <ChatRunProgressLabel
         fallbackLabel="Queued"
@@ -24,7 +24,7 @@ describe('ChatRunProgressLabel', () => {
     );
     act(() => jest.advanceTimersByTime(10_000));
 
-    expect(screen.getByText('Queued')).toBeTruthy();
+    expect(screen.getByText('Starting…')).toBeTruthy();
   });
 
   it('names the running tool and counts steps', () => {

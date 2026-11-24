@@ -183,14 +183,14 @@ test.describe('durable interactive transport cutover @ai-runs-v2-transport', () 
     });
 
     await expect(page.getByTestId('agent-run-status-queued')).toHaveText(
-      'Queued',
+      'Starting…',
       { timeout: 15_000 },
     );
     await expect(page.getByTestId('agent-run-status-queued')).not.toContainText(
       'waiting',
     );
     await expect(page.getByTestId('agent-run-status-dispatched')).toHaveText(
-      'Dispatched',
+      'Starting…',
       { timeout: 15_000 },
     );
   });
@@ -460,7 +460,7 @@ test.describe('durable interactive transport cutover @ai-runs-v2-transport', () 
     await page.getByTestId('interview-chat-composer').press('Enter');
 
     await expect(page.getByTestId('agent-run-status-queued')).toHaveText(
-      'Queued',
+      'Starting…',
       { timeout: 15_000 },
     );
     await expect(page.getByText(/429|USER_INTERACTIVE_LIMIT/i)).toHaveCount(0);

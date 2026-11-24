@@ -9,15 +9,34 @@ import {
 } from '../../shared/utils/modelAvailability';
 import {
   effortParameterFor,
+  supportedEffortLevelsFor,
+  type CursorModelParam,
   type CursorModelParameterDefinition,
 } from './agentEffortResolver';
 
 export interface AvailableModel {
   id: string;
   displayName: string;
+  /** Effort levels accepted by this model per live `Cursor.models.list()` parameters. */
+  supportedEffortLevels?: EffortLevel[];
+  /** Raw parameter definitions from `Cursor.models.list()`. */
+  parameters?: CursorModelParameterDefinition[];
 }
 
-interface CatalogModel extends AvailableModel {
+export interface ResolvedCursorModelChoice {
+  model: string;
+  effort: EffortLevel | undefined;
+  /**
+   * Frozen Cursor SDK model parameters resolved from `Cursor.models.list()`.
+   * Present when the catalog was consulted (`[]` means the model accepts no
+   * effort parameter); omitted when the catalog was unavailable.
+   */
+  modelParams?: CursorModelParam[];
+}
+
+interface CatalogModel {
+  id: string;
+  displayName: string;
   parameters: CursorModelParameterDefinition[];
 }
 
@@ -36,12 +55,19 @@ const HIDDEN_MODEL_IDS = new Set(['auto-smart']);
 const PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PROBE_RETRIGGER_MIN_GAP_MS = 5 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 60 * 1000;
-const PROBE_CONCURRENCY = 3;
+/**
+ * Probe sequentially with a pause between models so background probing stays
+ * well under Cursor's 30 req/min `get_models` rate limit and never starves
+ * live user chats after a restart or deploy.
+ */
+const PROBE_CONCURRENCY = 1;
+const DEFAULT_PROBE_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 4_000;
 const PROBE_PROMPT = 'Reply with the single word OK.';
 
 let blockedModelIds = new Set<string>();
 let lastProbeStartedAt = 0;
 let probeInFlight: Promise<void> | null = null;
+let probeDelayMs = DEFAULT_PROBE_DELAY_MS;
 
 async function fetchModelCatalog(): Promise<CatalogModel[]> {
   const now = Date.now();
@@ -73,7 +99,12 @@ export async function fetchAvailableModels(): Promise<AvailableModel[]> {
   scheduleModelProbe(catalog, PROBE_INTERVAL_MS);
   return catalog
     .filter((m) => !HIDDEN_MODEL_IDS.has(m.id) && !blockedModelIds.has(m.id))
-    .map(({ id, displayName }) => ({ id, displayName }));
+    .map(({ id, displayName, parameters }) => ({
+      id,
+      displayName,
+      supportedEffortLevels: supportedEffortLevelsFor(parameters),
+      parameters,
+    }));
 }
 
 /** The model's parameter definitions, or undefined when the catalog does not list it. */
@@ -84,22 +115,31 @@ export async function fetchModelParameters(
 }
 
 /**
- * The model and effort a run should send. A retired or blocked model falls
- * back as `resolveAvailableModelId` describes. Workers send the effort under
- * the `effort` parameter without reading the catalog, so it is dropped when
- * the resolved model takes effort under another name or not at all.
+ * The model, effort, and exact Cursor SDK parameter pair a run should send.
+ * A retired or blocked model falls back as `resolveAvailableModelId` describes.
+ * Parameter names (`effort`, `reasoning_effort`, `reasoning`) are resolved from
+ * the live `Cursor.models.list()` catalog so workers never guess.
  */
 export async function resolveCursorModelChoice(
   model: string,
   effort: EffortLevel | undefined,
-): Promise<{ model: string; effort: EffortLevel | undefined }> {
+): Promise<ResolvedCursorModelChoice> {
   const resolvedModel = resolveAvailableModelId(model, await fetchAvailableModels());
-  if (!effort) return { model: resolvedModel, effort };
+  if (!effort) return { model: resolvedModel, effort: undefined };
   const parameters = await fetchModelParameters(resolvedModel);
   if (!parameters) return { model: resolvedModel, effort };
+  const parameterId = effortParameterFor(parameters, effort);
+  if (!parameterId) {
+    return {
+      model: resolvedModel,
+      effort: undefined,
+      modelParams: [],
+    };
+  }
   return {
     model: resolvedModel,
-    effort: effortParameterFor(parameters, effort) === 'effort' ? effort : undefined,
+    effort,
+    modelParams: [{ id: parameterId, value: effort }],
   };
 }
 
@@ -127,16 +167,34 @@ function scheduleModelProbe(catalog: CatalogModel[], minimumGapMs: number): void
     });
 }
 
+function isCursorRateLimitMessage(message: string): boolean {
+  return /rate[_ ]limit/i.test(message);
+}
+
+function delayProbe(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 async function probeModels(apiKey: string, models: CatalogModel[]): Promise<void> {
   const blocked = new Set(blockedModelIds);
   const queue = [...models];
-  let roundTimedOut = false;
+  let roundStopped = false;
   const probeNext = async (): Promise<void> => {
-    for (let model = queue.shift(); model && !roundTimedOut; model = queue.shift()) {
+    for (let model = queue.shift(); model && !roundStopped; model = queue.shift()) {
       const outcome = await probeModel(apiKey, model.id);
-      if (outcome === 'timed-out') roundTimedOut = true;
+      if (outcome === 'timed-out' || outcome === 'rate-limited') {
+        roundStopped = true;
+        break;
+      }
       if (outcome === 'blocked') blocked.add(model.id);
       if (outcome === 'available') blocked.delete(model.id);
+      if (queue.length > 0 && probeDelayMs > 0) {
+        await delayProbe(probeDelayMs);
+      }
     }
   };
   await Promise.all(
@@ -145,7 +203,7 @@ async function probeModels(apiKey: string, models: CatalogModel[]): Promise<void
   blockedModelIds = blocked;
 }
 
-type ProbeOutcome = 'available' | 'blocked' | 'unknown' | 'timed-out';
+type ProbeOutcome = 'available' | 'blocked' | 'unknown' | 'timed-out' | 'rate-limited';
 
 /**
  * Attempts still running after a timeout. A new round waits for them, so a
@@ -180,9 +238,13 @@ async function probeModel(apiKey: string, id: string): Promise<ProbeOutcome> {
       if (timedOut) return 'timed-out';
       const result = await (await created.send(PROBE_PROMPT)).wait();
       if (result.status === 'finished') return 'available';
-      return isCursorModelBlockedMessage(errorMessage(result.error)) ? 'blocked' : 'unknown';
+      const detail = errorMessage(result.error);
+      if (isCursorRateLimitMessage(detail)) return 'rate-limited';
+      return isCursorModelBlockedMessage(detail) ? 'blocked' : 'unknown';
     } catch (error) {
-      return isCursorModelBlockedMessage(errorMessage(error)) ? 'blocked' : 'unknown';
+      const detail = errorMessage(error);
+      if (isCursorRateLimitMessage(detail)) return 'rate-limited';
+      return isCursorModelBlockedMessage(detail) ? 'blocked' : 'unknown';
     } finally {
       await agent?.[Symbol.asyncDispose]().catch(() => {});
       if (workspace) await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
@@ -211,6 +273,11 @@ export function resetModelsServiceForTests(): void {
   lastProbeStartedAt = 0;
   probeInFlight = null;
   runningProbeAttempts = 0;
+  probeDelayMs = DEFAULT_PROBE_DELAY_MS;
+}
+
+export function setModelProbeDelayMsForTests(ms: number): void {
+  probeDelayMs = ms;
 }
 
 export function modelProbeInFlightForTests(): Promise<void> | null {

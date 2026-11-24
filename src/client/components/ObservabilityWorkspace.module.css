@@ -1002,3 +1002,49 @@
     grid-template-columns: 1fr;
   }
 }
+
+.subTabShell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.subTabBar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.subTabButton {
+  padding: 7px 14px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.subTabButton:hover {
+  color: var(--text-primary);
+}
+
+.subTabButtonActive {
+  background: var(--accent-color);
+  color: var(--on-accent);
+  box-shadow: var(--glow-accent);
+}
+
+.aiExperienceSurface {
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  overflow: hidden;
+}

@@ -88,7 +88,7 @@ describe('TBI-008 DoD-2 / VT-09 worker-tier telemetry vocabulary', () => {
 });
 
 describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
-  it('allowlists exactly the seven approved structured property keys (including area)', () => {
+  it('allowlists exactly the nine approved structured property keys (including area, acquisitionMode, recreateReason)', () => {
     expect([...SAFE_PROPERTY_KEYS]).toEqual([
       'runId',
       'dispatchMessageId',
@@ -97,6 +97,8 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       'terminalReason',
       'stage',
       'area',
+      'acquisitionMode',
+      'recreateReason',
     ]);
   });
 
@@ -108,6 +110,9 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       lane: 'default',
       terminalReason: 'cancelled',
       stage: 'agent_cache_hit',
+      area: 'agent-home',
+      acquisitionMode: 'recreated',
+      recreateReason: 'deploy',
       prompt: 'private prompt content',
       executionSnapshot: '{"prompt":"private"}',
       snapshot: 'private snapshot content',
@@ -125,6 +130,9 @@ describe('TBI-008 DoD-3 / security NFR / VT-09 sanitizer', () => {
       lane: 'default',
       terminalReason: 'cancelled',
       stage: 'agent_cache_hit',
+      area: 'agent-home',
+      acquisitionMode: 'recreated',
+      recreateReason: 'deploy',
     });
   });
 

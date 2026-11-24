@@ -398,6 +398,72 @@ describe('durable interactive turn prompt', () => {
 
 });
 
+describe('durable brainstorm turn', () => {
+  const brainstormKickoff: Partial<ChatThread['kickoff']> = {
+    agentModule: 'brainstorm',
+    skillPath: undefined,
+  };
+
+  it('sends the collaborator instructions from code and no skill on the first turn', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'brainstorm',
+      kickoff: brainstormKickoff,
+      skillConfig: null,
+    });
+
+    expect(specification.skill).toBeNull();
+    expect(specification.currentPrompt).toContain('# Brainstorm collaborator');
+    expect(specification.currentPrompt).toContain('No scripted single question');
+    expect(specification.currentPrompt).not.toContain('# Pre-loaded skill content');
+  });
+
+  it('keeps the instructions for a rebuilt agent but not on later turns', async () => {
+    const specification = await admittedSpecification(
+      [
+        message('user', 'I want to explore offline notes', 1),
+        message('agent', 'What does offline mean for you?', 2),
+      ],
+      {
+        workflowClass: 'brainstorm',
+        kickoff: brainstormKickoff,
+        skillConfig: null,
+      },
+    );
+
+    expect(specification.currentPrompt).not.toContain('# Brainstorm collaborator');
+    expect(specification.recreationPrompt).toContain('# Brainstorm collaborator');
+  });
+
+  it('ignores a skill path that a Brainstorm thread stored before the instructions moved into code', async () => {
+    const loadSkill = jest.fn().mockResolvedValue({ path: SKILL_PATH, content: SKILL_CONTENT });
+
+    const specification = await admittedSpecification([], {
+      workflowClass: 'brainstorm',
+      kickoff: {
+        agentModule: 'brainstorm',
+        skillPath: '.cursor/skills/brainstorm/SKILL.md',
+        skillPathIsAppDefault: true,
+      },
+      loadSkill,
+      skillConfig: null,
+    });
+
+    expect(loadSkill).not.toHaveBeenCalled();
+    expect(specification.skill).toBeNull();
+    expect(specification.currentPrompt).toContain('# Brainstorm collaborator');
+  });
+
+  it('keeps a Brainstorm turn in the agentic class', async () => {
+    const specification = await admittedSpecification([], {
+      workflowClass: 'brainstorm',
+      kickoff: brainstormKickoff,
+      skillConfig: null,
+    });
+
+    expect(specification.interactiveClass).toBe('agentic');
+  });
+});
+
 describe('durable guided interview turn', () => {
   const repositoryContext = {
     contextContent: '## Product\n\nManagers approve timesheets.',

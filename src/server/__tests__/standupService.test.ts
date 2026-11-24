@@ -14,6 +14,25 @@ jest.mock('../services/teamsBotService', () => ({
   sendTeamsNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
+const mockFacilitatorAcquire = jest.fn();
+const mockFacilitatorRelease = jest.fn().mockResolvedValue(undefined);
+jest.mock('../services/cursorSdkAdapter', () => ({
+  createCursorSdkAdapter: jest.fn(() => ({
+    acquire: (...args: unknown[]) => mockFacilitatorAcquire(...args),
+    release: (...args: unknown[]) => mockFacilitatorRelease(...args),
+  })),
+}));
+
+const mockResolveSkillConfig = jest.fn();
+jest.mock('../services/projectSettingsService', () => ({
+  resolveSkillConfig: (...args: unknown[]) => mockResolveSkillConfig(...args),
+}));
+
+const mockGetDefaultModel = jest.fn().mockResolvedValue('claude-sonnet-4-6');
+jest.mock('../services/appSettingsService', () => ({
+  getDefaultModel: (...args: unknown[]) => mockGetDefaultModel(...args),
+}));
+
 jest.mock('../db/drizzle', () => ({
   db: {
     query: {
@@ -198,24 +217,41 @@ describe('runFacilitator', () => {
     expect(mockCreateThread).not.toHaveBeenCalled();
   });
 
-  it('starts facilitator thread for collecting sessions', async () => {
+  it('runs facilitator through CursorSdkAdapter for collecting sessions', async () => {
     mockDb.query.standupSessions.findFirst.mockResolvedValue({
       id: 'session-1',
       status: 'collecting',
       config: { project: 'AI-Pilot', skillSettingsId: 'skill-1' },
     });
+    mockResolveSkillConfig.mockResolvedValue({
+      id: 'skill-1',
+      project: 'AI-Pilot',
+      standupModel: 'claude-sonnet-4-6',
+    });
+    const waitMock = jest.fn().mockResolvedValue({ status: 'completed' });
+    const sendMock = jest.fn().mockResolvedValue({ wait: waitMock });
+    const disposeMock = jest.fn().mockResolvedValue(undefined);
+    mockFacilitatorAcquire.mockResolvedValue({
+      agentId: 'facilitator-agent-1',
+      mode: 'recreated',
+      send: sendMock,
+      dispose: disposeMock,
+    });
 
     await runFacilitator('session-1');
 
-    expect(mockCreateThread).toHaveBeenCalledWith(
-      'system-standup-facilitator',
+    expect(mockCreateThread).not.toHaveBeenCalled();
+    expect(mockFacilitatorAcquire).toHaveBeenCalledWith(
       expect.objectContaining({
-        project: 'AI-Pilot',
-        mode: 'standup-facilitator',
-        standupSessionId: 'session-1',
+        sessionKey: 'standup-facilitator:session-1',
+        model: { id: 'claude-sonnet-4-6' },
       }),
     );
-    expect(mockDb.update).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(waitMock).toHaveBeenCalledTimes(1);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+    expect(mockFacilitatorRelease).toHaveBeenCalledWith('standup-facilitator:session-1');
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -293,6 +329,7 @@ describe('triggerSessionForConfig project skill settings', () => {
         standupSkillPath: '.cursor/skills/custom-standup/SKILL.md',
         skillSettingsId: 'skill-1',
       }),
+      { harness: { area: 'standup-participant', version: 1 } },
     );
   });
 });

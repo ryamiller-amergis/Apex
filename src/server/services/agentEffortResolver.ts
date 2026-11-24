@@ -1,7 +1,13 @@
-import type { EffortLevel } from '../../shared/types/effort';
-import { isEffortLevel } from '../../shared/types/effort';
+import type {
+  CursorModelParam,
+  CursorModelParameterDefinition,
+  EffortLevel,
+} from '../../shared/types/effort';
+import { EFFORT_LEVELS, isEffortLevel } from '../../shared/types/effort';
 import type { AgentModuleId, ChatThreadKickoff } from '../../shared/types/chat';
 import type { ProjectSkillConfig } from '../../shared/types/projectSettings';
+
+export type { CursorModelParam, CursorModelParameterDefinition };
 
 const MODULE_EFFORT_KEYS = {
   interview: 'interviewEffort',
@@ -150,11 +156,6 @@ function acceptsEffortParameter(model: string): boolean {
 /** The parameter names Cursor models use for reasoning effort. */
 const EFFORT_PARAMETER_IDS = ['effort', 'reasoning_effort', 'reasoning'] as const;
 
-export interface CursorModelParameterDefinition {
-  id: string;
-  values: ReadonlyArray<{ value: string }>;
-}
-
 /**
  * The parameter a model takes the effort level under, or null when none of
  * its parameters accepts that level. Cursor rejects a run whose parameter
@@ -172,19 +173,85 @@ export function effortParameterFor(
 }
 
 /**
- * `parameters` is the model's definition list from `Cursor.models.list()`.
- * Without it the effort is sent as `effort`, so callers that cannot read the
- * catalog must pass an effort the model accepts under that name.
+ * Effort levels accepted by a model according to its `Cursor.models.list()`
+ * parameter definitions, preserving canonical order (`low`, `medium`, `high`).
+ */
+export function supportedEffortLevelsFor(
+  parameters: ReadonlyArray<CursorModelParameterDefinition>,
+): EffortLevel[] {
+  for (const id of EFFORT_PARAMETER_IDS) {
+    const definition = parameters.find((parameter) => parameter.id === id);
+    if (!definition) continue;
+    const supported = EFFORT_LEVELS.filter((level) =>
+      definition.values.some((option) => option.value === level),
+    );
+    if (supported.length > 0) return supported;
+  }
+  return [];
+}
+
+/** Deterministic cache-key fragment for effort / resolved SDK model parameters. */
+export function serializeModelParamsKey(
+  effort?: EffortLevel | null,
+  modelParams?: ReadonlyArray<CursorModelParam>,
+): string {
+  if (modelParams !== undefined) {
+    if (modelParams.length === 0) return 'params:none';
+    return `params:${modelParams.map((p) => `${p.id}=${p.value}`).join(',')}`;
+  }
+  return effort ? `effort:${effort}` : 'effort:none';
+}
+
+export interface BuildCursorModelSelectionOptions {
+  parameters?: ReadonlyArray<CursorModelParameterDefinition>;
+  /**
+   * Pre-resolved Cursor SDK parameters from App Service. When provided
+   * (including an empty array), workers pass these directly without guessing.
+   */
+  modelParams?: ReadonlyArray<CursorModelParam>;
+}
+
+/**
+ * Builds the `model` selection object passed when a Cursor SDK agent is created.
+ *
+ * Accepts either:
+ * - Pre-resolved `modelParams` (frozen by App Service via `resolveCursorModelChoice`),
+ *   used verbatim (an empty array sends only `{ id: model }`), or
+ * - `parameters` from `Cursor.models.list()`, or
+ * - Legacy `(model, effort)` fallback when neither is supplied.
  */
 export function buildCursorModelSelection(
   model: string,
   effort?: EffortLevel,
-  parameters?: ReadonlyArray<CursorModelParameterDefinition>,
+  parametersOrOptions?:
+    | ReadonlyArray<CursorModelParameterDefinition>
+    | BuildCursorModelSelectionOptions,
 ): {
   id: string;
-  params?: Array<{ id: string; value: EffortLevel }>;
+  params?: Array<{ id: string; value: string }>;
 } {
+  if (
+    parametersOrOptions &&
+    !Array.isArray(parametersOrOptions) &&
+    'modelParams' in parametersOrOptions &&
+    parametersOrOptions.modelParams !== undefined
+  ) {
+    if (!acceptsEffortParameter(model) || parametersOrOptions.modelParams.length === 0) {
+      return { id: model };
+    }
+    return {
+      id: model,
+      params: parametersOrOptions.modelParams.map((p) => ({
+        id: p.id,
+        value: p.value,
+      })),
+    };
+  }
+
   if (!effort || !acceptsEffortParameter(model)) return { id: model };
+  const parameters = Array.isArray(parametersOrOptions)
+    ? parametersOrOptions
+    : (parametersOrOptions as BuildCursorModelSelectionOptions | undefined)?.parameters;
   const parameterId = parameters ? effortParameterFor(parameters, effort) : 'effort';
   return parameterId
     ? { id: model, params: [{ id: parameterId, value: effort }] }

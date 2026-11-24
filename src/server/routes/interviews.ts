@@ -117,6 +117,7 @@ import {
   overrideDesignDocValidation,
 } from '../services/designDocService';
 import { readOutputBacklog, readOutputDesignDoc, readOutputTechSpec, readOutputAssumptions, readOutputPrd, readOutputValidationScorecard, readOutputValidationScorecardMd, createThread, getThreadAsync, updateThreadKickoffContext, updateThreadKickoffTranscript } from '../services/chatAgentService';
+import { getAreaProfile } from '../services/chatHarness/areaProfiles';
 import {
   approveInterviewBrief,
   formatInterviewBriefForPrd,
@@ -1514,6 +1515,7 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       return;
     }
 
+    const prdAssistantProfile = getAreaProfile('prd-assistant');
     const thread = await createThread(userId, {
       project: prd.project,
       agentModule: 'prdAssistant',
@@ -1525,7 +1527,10 @@ router.post('/prds/:prdId/assistant-thread', requirePermission('interviews:view'
       model,
       assistantType: 'prd',
       skillSettingsId: prd.skillSettingsId ?? skillConfig?.id ?? null,
-    }, { skipAutoKickoff: true });
+    }, {
+      skipAutoKickoff: true,
+      harness: { area: prdAssistantProfile.area, version: prdAssistantProfile.version },
+    });
 
     // Rewrite context now that we have the real thread ID.
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects
@@ -2608,6 +2613,7 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       return;
     }
 
+    const designDocAssistantProfile = getAreaProfile('design-doc-assistant');
     const thread = await createThread(userId, {
       project: doc.project,
       agentModule: 'designDocAssistant',
@@ -2619,7 +2625,10 @@ router.post('/design-docs/:id/assistant-thread', requirePermission('interviews:v
       model,
       assistantType: 'design-doc',
       skillSettingsId: doc.skillSettingsId ?? skillConfig?.id ?? null,
-    }, { skipAutoKickoff: true });
+    }, {
+      skipAutoKickoff: true,
+      harness: { area: designDocAssistantProfile.area, version: designDocAssistantProfile.version },
+    });
 
     // Rewrite the context file now that we have the real thread ID.
     // Also update the thread's in-memory kickoff so buildFreeChatPrompt injects

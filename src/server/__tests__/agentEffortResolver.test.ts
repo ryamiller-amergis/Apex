@@ -5,6 +5,8 @@ import {
   deriveAgentModule,
   effortParameterFor,
   resolveEffort,
+  serializeModelParamsKey,
+  supportedEffortLevelsFor,
 } from '../services/agentEffortResolver';
 
 function config(
@@ -341,5 +343,32 @@ describe('buildCursorModelSelection', () => {
         'low',
       ),
     ).toBe('effort');
+  });
+
+  it('uses pre-resolved modelParams verbatim without guessing', () => {
+    expect(
+      buildCursorModelSelection('claude-sonnet-5-5', 'medium', {
+        modelParams: [{ id: 'reasoning_effort', value: 'medium' }],
+      }),
+    ).toEqual({
+      id: 'claude-sonnet-5-5',
+      params: [{ id: 'reasoning_effort', value: 'medium' }],
+    });
+    expect(
+      buildCursorModelSelection('default', 'high', { modelParams: [] }),
+    ).toEqual({ id: 'default' });
+  });
+
+  it('extracts supported effort levels and builds deterministic cache keys', () => {
+    expect(
+      supportedEffortLevelsFor([
+        { id: 'reasoning_effort', values: levels('high', 'low', 'max') },
+      ]),
+    ).toEqual(['low', 'high']);
+    expect(supportedEffortLevelsFor([])).toEqual([]);
+    expect(
+      serializeModelParamsKey('medium', [{ id: 'reasoning_effort', value: 'medium' }]),
+    ).toBe('params:reasoning_effort=medium');
+    expect(serializeModelParamsKey('medium', [])).toBe('params:none');
   });
 });

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ChatMessage } from '../../shared/types/chat';
+import type { AgentActivityItem, HarnessTranscriptItem } from '../chatHarness/types';
 import { friendlyChatProgressLabel } from '../../shared/utils/chatProgressCopy';
-import { useAgentChatSession } from './useAgentChatSession';
+import { useAgentChatSession, type AgentChatSession } from './useAgentChatSession';
 import { RUN_STALLED_NOTICE, useRunStalled } from './useRunStalled';
 import {
   openInteractiveStream,
@@ -13,6 +14,8 @@ export interface AskApexMessage {
   role: 'user' | 'assistant';
   text: string;
   ts: string;
+  activity?: AgentActivityItem[];
+  activityUnavailable?: boolean;
 }
 
 type SessionStatus = 'idle' | 'preparing' | 'streaming' | 'error';
@@ -26,11 +29,14 @@ interface AskApexSseEvent {
 }
 
 function toAskApexMessage(message: ChatMessage): AskApexMessage {
+  const harnessItem = message as HarnessTranscriptItem;
   return {
     id: message.id,
     role: message.role === 'user' ? 'user' : 'assistant',
     text: message.text,
     ts: message.ts,
+    ...(harnessItem.activity ? { activity: harnessItem.activity } : {}),
+    ...(harnessItem.activityUnavailable ? { activityUnavailable: harnessItem.activityUnavailable } : {}),
   };
 }
 
@@ -57,7 +63,10 @@ export function useAskApex() {
   const [threadId, setThreadId] = useState<string | null>(null);
   // Ask Apex threads wait for the user's first message, so an empty thread is
   // not a thread that is still preparing.
-  const chat = useAgentChatSession(threadId);
+  const chat = useAgentChatSession(threadId, {
+    harnessArea: 'ask-apex',
+    area: 'ask-apex',
+  });
   const chatStalled = useRunStalled(
     Boolean(threadId) && chat.isRunning && !chat.isRetrying,
     chat.lastProgressAt,
@@ -153,10 +162,14 @@ export function useAskApex() {
   }, [connectSse]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { model?: string }) => {
       if (!sessionId || !text.trim()) return;
       if (threadId) {
-        await chat.send(text.trim());
+        if (options?.model) {
+          await chat.send(text.trim(), { model: options.model });
+        } else {
+          await chat.send(text.trim());
+        }
         return;
       }
       setStatus('streaming');
@@ -213,6 +226,8 @@ export function useAskApex() {
           : 'idle';
     return {
       sessionId,
+      threadId,
+      session: chat,
       messages: chat.visibleMessages.filter(isConversationMessage).map(toAskApexMessage),
       streamingText: chat.streamingText,
       status: chatStatus,
@@ -235,6 +250,8 @@ export function useAskApex() {
 
   return {
     sessionId,
+    threadId: null as string | null,
+    session: null as AgentChatSession | null,
     messages,
     streamingText,
     status,

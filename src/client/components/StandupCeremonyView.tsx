@@ -4,10 +4,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useChatThread } from '../hooks/useChatThreads';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { useChatAttachments } from '../hooks/useChatAttachments';
 import { useAppShell } from '../hooks/useAppShell';
 import { useSpeechInput } from '../hooks/useSpeechInput';
-import { AgentComposer } from './agentChat';
+import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
 import type { WorkItem } from '../types/workitem';
 import styles from './StandupCeremonyView.module.css';
 
@@ -205,7 +206,10 @@ export const StandupCeremonyView: React.FC = () => {
     initialMessages: thread?.messages,
     initialStatus: thread?.status,
     beforeSend: async () => { if (threadId) await syncToken(threadId); },
+    harnessArea: 'standup-participant',
+    area: 'standup-participant',
   });
+  const modelPicker = useHarnessModelPicker();
   const {
     messages,
     streamingText,
@@ -255,19 +259,19 @@ export const StandupCeremonyView: React.FC = () => {
     event.currentTarget.value = '';
   }, [addFiles]);
 
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (text: string) => {
+    const trimmed = text.trim();
     const outgoing = [...attachments];
-    if ((!text && outgoing.length === 0) || !threadId) return;
+    if ((!trimmed && outgoing.length === 0) || !threadId) return false;
     if (speech.isListening) speech.stop();
-    const message = text || 'Please use the attached files as additional context.';
-    setInput('');
-    const sent = await chatSession.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const message = trimmed || 'Please use the attached files as additional context.';
+    const sent = await chatSession.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, chatSession, clearAttachments, input, speech, threadId]);
+    return sent;
+  }, [attachments, chatSession, clearAttachments, modelPicker.model, speech, threadId]);
 
   const handleSubmit = useCallback(async () => {
     if (!session) return;
@@ -301,7 +305,12 @@ export const StandupCeremonyView: React.FC = () => {
           <h2>No Standup Today</h2>
           <p>You don't have a standup session scheduled for today.</p>
           {can('standup:manage') && (
-            <button className={styles.manageBtn} onClick={() => navigate('/standup-manage')}>
+            <button
+              type="button"
+              className={styles.manageBtn}
+              onClick={() => navigate('/standup-manage')}
+              {...{ 'data-testid': 'standup-go-manage-btn' }}
+            >
               Go to Standup Management →
             </button>
           )}
@@ -329,105 +338,136 @@ export const StandupCeremonyView: React.FC = () => {
             {isSubmitted && <span className={styles.badge}>Submitted</span>}
           </header>
 
-          <div className={styles.messages}>
-            {visibleMessages.map((msg, idx) => {
-              const prevRole = idx > 0 ? visibleMessages[idx - 1].role : null;
-              const nextRole = idx < visibleMessages.length - 1 ? visibleMessages[idx + 1].role : null;
-              const isFirstInGroup = prevRole !== msg.role;
-              const isLastInGroup = nextRole !== msg.role;
-              return (
-                <div
-                  key={msg.id}
-                  className={[
-                    styles.message,
-                    styles[msg.role],
-                    !isFirstInGroup ? styles.messageGrouped : '',
-                    !isLastInGroup ? styles.messageGroupedTop : '',
-                  ].join(' ')}
-                >
-                  {isFirstInGroup && (
-                    <div className={styles.role}>{msg.role === 'agent' ? 'Standup Bot' : 'You'}</div>
-                  )}
-                  <div className={styles.bubble}>
-                    {msg.role === 'agent' ? (
+          <AgentHarnessPanel
+            area="standup-participant"
+            session={chatSession}
+            testIdPrefix="standup"
+            {...{ 'data-testid': 'standup-harness-panel' }}
+            items={visibleMessages}
+            locked={isSubmitted}
+            draft={input}
+            onDraftChange={setInput}
+            onSend={handleSend}
+            renderTranscript={({ items: transcriptItems, liveWorkBox, messageFailure }) => (
+              <div className={styles.messages}>
+                {transcriptItems.map((msg, idx) => {
+                  const prevRole = idx > 0 ? transcriptItems[idx - 1].role : null;
+                  const nextRole = idx < transcriptItems.length - 1 ? transcriptItems[idx + 1].role : null;
+                  const isFirstInGroup = prevRole !== msg.role;
+                  const isLastInGroup = nextRole !== msg.role;
+                  return (
+                    <div
+                      key={msg.id}
+                      data-message-id={msg.id}
+                      className={[
+                        styles.message,
+                        styles[msg.role],
+                        !isFirstInGroup ? styles.messageGrouped : '',
+                        !isLastInGroup ? styles.messageGroupedTop : '',
+                      ].join(' ')}
+                    >
+                      {isFirstInGroup && (
+                        <div className={styles.role}>{msg.role === 'agent' ? 'Standup Bot' : 'You'}</div>
+                      )}
+                      <div className={styles.bubble}>
+                        {msg.role === 'agent' ? (
+                          <>
+                            {msg.activity?.length || msg.activityUnavailable ? (
+                              <AgentThoughtProcess
+                                items={msg.activity}
+                                isUnavailable={msg.activityUnavailable}
+                                testIdPrefix="standup"
+                                testIds={{
+                                  drawer: 'standup-thought-process',
+                                  toggle: 'standup-thought-process-toggle',
+                                  thinking: `standup-saved-thinking-${msg.id}`,
+                                  steps: `standup-saved-steps-${msg.id}`,
+                                  toolGroup: `standup-saved-tool-group-${msg.id}`,
+                                }}
+                              />
+                            ) : null}
+                            <div className={styles.mdContent}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                                {msg.text}
+                              </ReactMarkdown>
+                            </div>
+                          </>
+                        ) : (
+                          msg.text
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {liveWorkBox}
+
+                {streamingText && (
+                  <div
+                    className={`${styles.message} ${styles.agent} ${transcriptItems.length > 0 && transcriptItems[transcriptItems.length - 1].role === 'agent' ? styles.messageGrouped : ''}`}
+                    {...(liveWorkBox ? {} : { 'data-testid': 'standup-streaming' })}
+                  >
+                    {!(transcriptItems.length > 0 && transcriptItems[transcriptItems.length - 1].role === 'agent') && (
+                      <div className={styles.role}>Standup Bot</div>
+                    )}
+                    <div className={styles.bubble}>
                       <div className={styles.mdContent}>
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                          {msg.text}
+                          {streamingText}
                         </ReactMarkdown>
+                        <span className={styles.streamCursor} aria-hidden="true" />
                       </div>
-                    ) : (
-                      msg.text
-                    )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-
-            {streamingText && (
-              <div className={`${styles.message} ${styles.agent} ${visibleMessages.length > 0 && visibleMessages[visibleMessages.length - 1].role === 'agent' ? styles.messageGrouped : ''}`}>
-                {!(visibleMessages.length > 0 && visibleMessages[visibleMessages.length - 1].role === 'agent') && (
-                  <div className={styles.role}>Standup Bot</div>
                 )}
-                <div className={styles.bubble}>
-                  <div className={styles.mdContent}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-                      {streamingText}
-                    </ReactMarkdown>
-                    <span className={styles.streamCursor} aria-hidden="true" />
-                  </div>
-                </div>
-              </div>
-            )}
 
-            {showTypingIndicator && (
-              <div className={`${styles.message} ${styles.agent}`}>
-                <div className={styles.role}>Standup Bot</div>
-                <div className={styles.bubble}>
-                  <div className={styles.thinkingBubble}>
-                    {thinkingText ? (
-                      <span className={styles.thinkingText}>{thinkingText}</span>
-                    ) : (
-                      <div className={styles.typingIndicator} aria-label="Agent is thinking">
-                        <span className={styles.typingDot} />
-                        <span className={styles.typingDot} />
-                        <span className={styles.typingDot} />
+                {!liveWorkBox && showTypingIndicator && (
+                  <div className={`${styles.message} ${styles.agent}`}>
+                    <div className={styles.role}>Standup Bot</div>
+                    <div className={styles.bubble}>
+                      <div className={styles.thinkingBubble}>
+                        {thinkingText ? (
+                          <span className={styles.thinkingText}>{thinkingText}</span>
+                        ) : (
+                          <div className={styles.typingIndicator} aria-label="Agent is thinking">
+                            <span className={styles.typingDot} />
+                            <span className={styles.typingDot} />
+                            <span className={styles.typingDot} />
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {isRetrying && retryReason && (
+                  <div className={styles.thinking}>{retryReason}</div>
+                )}
+
+                {messageFailure}
+
+                {panelLoading && (
+                  <div className={styles.thinking}>Loading work item…</div>
+                )}
+
+                <div ref={messagesEndRef} />
               </div>
             )}
-
-            {isRetrying && retryReason && (
-              <div className={styles.thinking}>{retryReason}</div>
-            )}
-
-            {panelLoading && (
-              <div className={styles.thinking}>Loading work item…</div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {!isSubmitted && (
-            <AgentComposer
-              className={styles.composerEmbed}
-              value={input}
-              onChange={setInput}
-              onSend={handleSend}
-              disabled={isRunning}
-              isRunning={isRunning}
-              allowEmptySend
-              placeholder="Type your response… (Enter to send, Shift+Enter for new line)"
-              testIdPrefix="standup"
-              {...{ 'data-testid': 'standup-composer' }}
-              rows={2}
-              attachments={attachments}
-              attachmentError={attachmentError}
-              onRemoveAttachment={removeAttachment}
-              onAttachClick={() => fileInputRef.current?.click()}
-              onPasteFiles={(files) => { void addFiles(files); }}
-              fileInput={(
+            composer={{
+              ...modelPicker,
+              hideComposer: isSubmitted,
+              disabled: chatSession.isSending,
+              allowEmptySend: true,
+              placeholder: isRunning
+                ? 'Send a follow-up while the agent works…'
+                : 'Type your response… (Enter to send, Shift+Enter for new line)',
+              rows: 2,
+              attachments,
+              attachmentError,
+              onRemoveAttachment: removeAttachment,
+              onAttachClick: () => fileInputRef.current?.click(),
+              onPasteFiles: (files) => { void addFiles(files); },
+              fileInput: (
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -437,14 +477,14 @@ export const StandupCeremonyView: React.FC = () => {
                   disabled={isRunning}
                   {...{ 'data-testid': 'standup-file-input' }}
                 />
-              )}
-              speech={{
+              ),
+              speech: {
                 isListening: speech.isListening,
                 isSpeechSupported: speech.isSpeechSupported,
                 speechError: speech.speechError,
                 onToggle: () => speech.toggle(input),
-              }}
-              trailingActions={(
+              },
+              trailingActions: (
                 <button
                   className={styles.submitBtn}
                   onClick={handleSubmit}
@@ -454,15 +494,16 @@ export const StandupCeremonyView: React.FC = () => {
                 >
                   {submitting ? 'Submitting…' : 'Submit Standup'}
                 </button>
-              )}
-            />
-          )}
+              ),
+            }}
+          />
 
           {error && <div className={styles.error}>{error}</div>}
         </div>
 
         {selectedItem && (
           <Suspense fallback={null}>
+            {/* data-testid-exempt — DetailsPanel owns its panel chrome; no data-testid prop */}
             <DetailsPanel
               workItem={selectedItem}
               onClose={() => setSelectedItem(null)}

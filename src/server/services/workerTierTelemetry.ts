@@ -33,6 +33,8 @@ export const SAFE_PROPERTY_KEYS: ReadonlySet<WorkerTierSafePropertyKey> =
     'terminalReason',
     'stage',
     'area',
+    'acquisitionMode',
+    'recreateReason',
   ]);
 
 const MAX_PROPERTY_LENGTH = 256;

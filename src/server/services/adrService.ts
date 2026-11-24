@@ -209,10 +209,52 @@ export async function listAdrs(filters?: {
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(adrs.updatedAt));
 
-  return Promise.all(rows.map(async (row) => {
-    const { content: _content, ...summary } = await withSettingsName(row);
-    return summary;
-  }));
+  if (rows.length === 0) return [];
+
+  const allUserIds = [
+    ...new Set(rows.flatMap((row) => [row.authorId, ...(row.reviewerIds ?? [])])),
+  ];
+  const uniqueSettingsIds = [
+    ...new Set(rows.map((row) => row.skillSettingsId).filter(Boolean)),
+  ] as string[];
+
+  const [users, settingsNameEntries] = await Promise.all([
+    allUserIds.length > 0
+      ? db
+        .select({ id: appUsers.oid, displayName: appUsers.displayName })
+        .from(appUsers)
+        .where(inArray(appUsers.oid, allUserIds))
+      : Promise.resolve([]),
+    Promise.all(
+      uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const),
+    ),
+  ]);
+
+  const displayNameById = new Map(users.map((user) => [user.id, user.displayName ?? user.id]));
+  const settingsNameById = new Map(settingsNameEntries);
+
+  return rows.map((row) => {
+    const reviewerIds = row.reviewerIds ?? [];
+    const { content: _content, ...rest } = row;
+    return {
+      ...rest,
+      ownerName: displayNameById.get(row.authorId) ?? row.authorId,
+      reviewerIds,
+      reviewers: reviewerIds.map((id) => ({
+        id,
+        displayName: displayNameById.get(id) ?? id,
+      })),
+      model: row.model ?? undefined,
+      effort: row.effort ?? undefined,
+      skillSettingsId: row.skillSettingsId ?? null,
+      skillSettingsName: row.skillSettingsId
+        ? settingsNameById.get(row.skillSettingsId) ?? null
+        : null,
+      status: mapStatus(row.status),
+      slug: row.slug ?? null,
+      fixCommentId: row.fixCommentId ?? null,
+    };
+  });
 }
 
 export async function getAdr(id: string): Promise<Adr | null> {

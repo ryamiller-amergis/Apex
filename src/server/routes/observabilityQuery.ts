@@ -5,9 +5,16 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { isEffortLevel, type EffortLevel } from '../../shared/types/effort';
 import {
+  isAiExperienceGranularity,
+  isAiExperienceWindow,
+  type AiExperienceGranularity,
+  type AiExperienceWindow,
+} from '../../shared/types/aiExperience';
+import {
   OBSERVABILITY_VIEWER_FLAG,
   type ObservabilityTrendWindow,
 } from '../../shared/types/observability';
+import { getAiExperienceMetrics } from '../services/aiExperienceMetricsService';
 import { isFeatureEnabled } from '../services/featureFlagService';
 import { getJourneyAggregationService } from '../services/journeyAggregationService';
 import {
@@ -225,6 +232,45 @@ router.post('/po-digest/generate', async (req: Request, res: Response): Promise<
     res.status(200).json(response);
   } catch (err) {
     sendQueryError('po-digest-generate', err, res);
+  }
+});
+
+function parseOptionalAiExperienceWindow(raw: unknown): AiExperienceWindow | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  if (!isAiExperienceWindow(trimmed)) {
+    throw new ObservabilityQueryError('OBSERVABILITY_INVALID_QUERY', 'Unsupported AI experience window');
+  }
+  return trimmed;
+}
+
+function parseOptionalAiExperienceGranularity(raw: unknown): AiExperienceGranularity | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  if (!isAiExperienceGranularity(trimmed)) {
+    throw new ObservabilityQueryError('OBSERVABILITY_INVALID_QUERY', 'Unsupported granularity');
+  }
+  return trimmed;
+}
+
+router.get('/ai-experience', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const query = queryRecord(req.query);
+    // Validate project param for consistency; `scopeProject` optionally narrows or defaults to 'all'.
+    parseProjectParam(query);
+    const rawScope = typeof query.scopeProject === 'string' ? query.scopeProject.trim() : 'all';
+    const scopeProject = !rawScope || rawScope.toLowerCase() === 'all' ? null : rawScope;
+    const window = parseOptionalAiExperienceWindow(query.window);
+    const granularity = parseOptionalAiExperienceGranularity(query.granularity);
+
+    const metrics = await getAiExperienceMetrics({
+      project: scopeProject,
+      window,
+      granularity,
+    });
+    res.status(200).json(metrics);
+  } catch (err) {
+    sendQueryError('ai-experience', err, res);
   }
 });
 

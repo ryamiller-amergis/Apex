@@ -3,8 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { AgentRunPhase, ChatMessage } from '../../../shared/types/chat';
 import type { ToolProgress } from '../../hooks/useChatStream';
-import { ChatRunProgressLabel } from '../ChatRunProgressLabel';
 import { AgentMessage } from './AgentMessage';
+import { AgentRunStatusText } from './AgentRunStatusText';
 import styles from './agentChat.module.css';
 
 export interface AssistantWelcome {
@@ -44,13 +44,12 @@ function RunProgress({
     <div className={styles.runProgress} role="status" aria-live="polite" {...{ 'data-testid': testId }}>
       <span className={styles.runSpinner} aria-hidden="true" />
       <span className={styles.runProgressLabel}>
-        {progressPhase === 'queued' ? 'Queued' : progressPhase === 'dispatched' ? 'Dispatched' : (
-          <ChatRunProgressLabel
-            fallbackLabel={label}
-            progressPhase={progressPhase}
-            toolProgress={toolProgress}
-          />
-        )}
+        <AgentRunStatusText
+          progressPhase={progressPhase}
+          progressLabel={label}
+          fallbackLabel={label}
+          toolProgress={toolProgress}
+        />
       </span>
     </div>
   );

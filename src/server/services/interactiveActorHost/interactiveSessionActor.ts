@@ -28,6 +28,7 @@ import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle'
 import type {
   AiRunIngestBody,
   AiRunIngestResponse,
+  InlineInteractiveArtifact,
   InteractiveTurnStageTimings,
 } from '../../../shared/types/aiRunIngest';
 import type { AiRunBlobRef } from '../../../shared/types/aiRunV2';
@@ -42,9 +43,16 @@ import {
   mcpServerTurnRequiresToolUse,
 } from '../../../shared/types/mcpServers';
 import { INTERACTIVE_LANE } from '../../../shared/types/interactiveWorkflow';
-import { resolveChatAreaId } from '../../../shared/types/chatHarness';
+import {
+  resolveChatAreaId,
+  type HarnessAgentPhase,
+  type HarnessControlMessage,
+  type HarnessPendingControl,
+  type HarnessRecreateReason,
+} from '../../../shared/types/chatHarness';
 import type { InteractiveStageName } from '../../../shared/types/workerTierOperations';
 import {
+  computeTurnCostFromSdkUsage,
   createCursorTurnEndMonitor,
   createCursorRunEventEnvelope,
   CursorExecutionWaitError,
@@ -54,7 +62,9 @@ import {
   tokenFieldsForTerminalIngest,
   type CursorExecutionResult,
 } from '../cursorExecutionCore';
+import { serializeModelParamsKey } from '../agentEffortResolver';
 import type { WorkerCursorExecutionRun } from '../aiRunsWorker/cursorExecution';
+import { AdapterResumeStalledError } from '../cursorSdkAdapter/types';
 import { normalizeGuidedInterviewResponse } from '../guidedInterviewState';
 import {
   AiRunCallbackError,
@@ -69,6 +79,17 @@ import {
   createInteractiveDurableStreamBatcher,
   buildOffsetLiveTokenEvent,
 } from '../interactiveDurableStreamBatcher';
+import type {
+  ChatHarnessControlBus,
+  HarnessCancelDisposition,
+  HarnessControlDisposition,
+  HarnessSteerDisposition,
+} from '../interactiveControlBus';
+import {
+  defaultAgentStoreSync,
+  type AgentStoreRestoreStatus,
+  type AgentStoreSync,
+} from './agentStoreSync';
 import type { InteractiveCursorAgentHandle } from './interactiveCursorExecution';
 import { isRetryableCursorConnectionError } from './cursorConnectionError';
 import { turnReadSources } from './brainstormSourceMount';
@@ -123,16 +144,14 @@ export function brainstormSourceIdsSignature(
 }
 export function resolveInteractiveThreadWorkspacePath(
   threadId: string,
-  groundingSha: string | null,
+  _groundingSha?: string | null,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const configured = env.AI_RUNS_INTERACTIVE_ATTEMPT_ROOT?.trim();
   const root = configured && configured.length > 0 ? configured : os.tmpdir();
-  // Cap revision length so `.cursor/projects/<encoded-cwd>/sdk-agent-store/<hash>/index.db-wal`
-  // stays under Windows MAX_PATH (260 chars), avoiding SQLite "unable to open database file".
-  const cleaned = groundingSha?.replace(/[^0-9a-zA-Z]/g, '') ?? '';
-  const revision = cleaned.length > 0 ? cleaned.slice(0, 8) : 'ungrounded';
-  return path.join(root, 'apex-interactive-thread', threadId, revision);
+  // One stable folder per thread (no SHA segment) so the Cursor SDK agent
+  // store keyed by working directory survives commit updates.
+  return path.join(root, 'apex-interactive-thread', threadId);
 }
 
 /** Attempts remembered per process so a repeated dispatch never reruns a turn. */
@@ -304,7 +323,7 @@ export interface InteractiveActorDependencies {
     bootstrap: InteractiveActorBootstrap,
     workspacePath: string,
     signal: AbortSignal,
-  ): Promise<AiRunBlobRef | undefined>;
+  ): Promise<AttemptArtifactsUploadResult>;
   /** Fenced runner ingest (reuses /api/internal/ai-runs/.../ingest). */
   postIngest(
     projectId: string,
@@ -332,6 +351,49 @@ export interface InteractiveActorDependencies {
   agentCacheMax?: number;
   /** Probe window in ms before a silent warm/resumed Agent is recreated in-turn (default 12s). */
   warmFirstEventProbeMs?: number;
+  /** Optional Redis control bus for low-latency steer/cancel delivery and acks. */
+  controlBus?: Pick<ChatHarnessControlBus, 'subscribeControl' | 'publishAck'>;
+  /** Optional Blob backup/restore sync for the thread's SDK agent store. */
+  agentStoreSync?: AgentStoreSync;
+  /** Optional host revision identifier used to attribute deploy-driven recreations. */
+  hostRevision?: string | (() => string | null);
+}
+
+export type AttemptArtifactsUploadResult =
+  | AiRunBlobRef
+  | Readonly<{
+      manifestRef?: AiRunBlobRef;
+      inlineArtifacts?: ReadonlyArray<InlineInteractiveArtifact>;
+    }>
+  | undefined;
+
+function unpackAttemptArtifactsResult(result: AttemptArtifactsUploadResult): {
+  artifactManifestRef?: AiRunBlobRef;
+  inlineArtifacts?: ReadonlyArray<InlineInteractiveArtifact>;
+} {
+  if (!result) return {};
+  if ('container' in result && 'key' in result) {
+    return { artifactManifestRef: result };
+  }
+  return {
+    ...(result.manifestRef ? { artifactManifestRef: result.manifestRef } : {}),
+    ...(result.inlineArtifacts && result.inlineArtifacts.length > 0
+      ? { inlineArtifacts: result.inlineArtifacts }
+      : {}),
+  };
+}
+
+export interface InteractiveSteerInput {
+  threadId: string;
+  runId: string;
+  commandId: string;
+  text: string;
+}
+
+export interface InteractiveCancelInput {
+  threadId: string;
+  runId: string;
+  commandId: string;
 }
 
 export interface InteractiveSessionActor {
@@ -340,23 +402,113 @@ export interface InteractiveSessionActor {
     threadId: string;
     bootstrap: InteractiveActorBootstrap;
   }): Promise<InteractiveTurnOutcome>;
+  steer?(input: InteractiveSteerInput): Promise<HarnessSteerDisposition>;
+  cancel?(input: InteractiveCancelInput): Promise<HarnessCancelDisposition>;
   /** Dispose every warm checkout + cached Agent (process shutdown / deactivation). */
   disposeAll(): Promise<void>;
+}
+
+export interface InteractiveSessionActorController
+  extends InteractiveSessionActor {
+  steer(input: InteractiveSteerInput): Promise<HarnessSteerDisposition>;
+  cancel(input: InteractiveCancelInput): Promise<HarnessCancelDisposition>;
 }
 
 interface CachedAgentEntry {
   handle: InteractiveCursorAgentHandle;
   lastUsedAt: number;
+  /** Serialized effort / resolved Cursor SDK model parameters for cache compatibility. */
+  modelParamsKey?: string;
+  /** Cumulative cost in cents reported by `handle.readUsage()` after the previous turn. */
+  lastCumulativeCostCents?: number;
   /** Signature of mounted Brainstorm source IDs + SHAs when the Agent's customTools were built. */
   brainstormSourcesSignature?: string;
+  /** Pinned grounding SHA materialized into the stable thread workspace. */
+  groundingSha?: string | null;
   /** Removes the thread workspace the cached Agent runs in. */
   releaseWorkspace?: () => Promise<void>;
+}
+
+interface ActiveTurnController {
+  readonly runId: string;
+  handleSteer(
+    commandId: string,
+    text: string,
+  ): Promise<HarnessSteerDisposition>;
+  handleCancel(commandId: string): Promise<HarnessCancelDisposition>;
+}
+
+interface RecreateReasonInput {
+  hadPriorBinding: boolean;
+  wasIdleEvicted: boolean;
+  workspaceChanged: boolean;
+  hostRevisionChanged: boolean;
+  storeRestoreStatus: AgentStoreRestoreStatus | null;
+  resumeReturnedNotFound?: boolean;
+}
+
+function resolveRecreateReason(input: RecreateReasonInput): HarnessRecreateReason {
+  if (input.workspaceChanged) return 'folder-change';
+  if (input.hostRevisionChanged) return 'deploy';
+  if (input.hadPriorBinding && input.storeRestoreStatus === 'missing') {
+    return 'replica-move';
+  }
+  if (
+    input.hadPriorBinding &&
+    (input.resumeReturnedNotFound || input.storeRestoreStatus === 'restored')
+  ) {
+    return 'sdk-version';
+  }
+  if (input.wasIdleEvicted) return 'idle-eviction';
+  return 'unknown';
+}
+
+function mergePendingSteersIntoPrompt(
+  basePrompt: string,
+  steers: ReadonlyArray<{ commandId: string; text: string }>,
+): string {
+  if (steers.length === 0) return basePrompt;
+  const steerBlock = steers
+    .map((item) => item.text.trim())
+    .filter((text) => text.length > 0)
+    .join('\n\n');
+  if (!steerBlock) return basePrompt;
+  return `${basePrompt}\n\nAdditional user guidance:\n${steerBlock}`;
+}
+
+function isAdapterResumeStalledError(
+  error: unknown,
+): error is AdapterResumeStalledError {
+  return (
+    error instanceof AdapterResumeStalledError ||
+    (error instanceof Error && error.name === 'AdapterResumeStalledError')
+  );
 }
 
 function isSuccessfulWait(result: CursorExecutionResult): boolean {
   if (result.completedOnTurnEnd) return true;
   const status = result.waitResult.status.trim().toLowerCase();
   return status === 'finished' || status === 'completed' || status === 'success';
+}
+
+function firstNonEmptySummaryText(
+  ...candidates: Array<string | null | undefined>
+): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function extractDeltaSummaryText(update: unknown): string | undefined {
+  if (!update || typeof update !== 'object') return undefined;
+  const record = update as { type?: unknown; summary?: unknown };
+  if (record.type === 'summary' && typeof record.summary === 'string') {
+    return firstNonEmptySummaryText(record.summary);
+  }
+  return undefined;
 }
 
 /**
@@ -430,7 +582,7 @@ function unsuccessfulWaitDetail(result: CursorExecutionResult): string {
 
 export function createInteractiveSessionActor(
   dependencies: InteractiveActorDependencies,
-): InteractiveSessionActor {
+): InteractiveSessionActorController {
   const turnQueue = dependencies.turnQueue ?? createPerThreadTurnQueue();
   const telemetry = dependencies.telemetry ?? workerTierTelemetry;
   const batchMaxBytes =
@@ -449,6 +601,16 @@ export function createInteractiveSessionActor(
     dependencies.agentCacheMax ?? INTERACTIVE_AGENT_CACHE_MAX;
   const warmFirstEventProbeMs =
     dependencies.warmFirstEventProbeMs ?? INTERACTIVE_WARM_FIRST_EVENT_PROBE_MS;
+  const agentStoreSync = dependencies.agentStoreSync ?? defaultAgentStoreSync;
+  const resolveHostRevision = (): string | null => {
+    if (typeof dependencies.hostRevision === 'function') {
+      return dependencies.hostRevision()?.trim() || null;
+    }
+    if (typeof dependencies.hostRevision === 'string') {
+      return dependencies.hostRevision.trim() || null;
+    }
+    return process.env.CONTAINER_APP_REVISION?.trim() || null;
+  };
 
   // Warm session cache keyed by threadId — single activation reuses the
   // grounded checkout and live Cursor Agent across turns.
@@ -457,6 +619,12 @@ export function createInteractiveSessionActor(
   const agentIdByThread = new Map<string, string | null>();
   // Agents whose resume stalled; the next turn recreates instead of resuming.
   const unresumableAgentIds = new Set<string>();
+  // Threads whose cached Agent was evicted due to idle TTL or cache overflow.
+  const evictedThreads = new Set<string>();
+  const lastWorkspacePathByThread = new Map<string, string>();
+  const lastHostRevisionByThread = new Map<string, string | null>();
+  // Active per-thread control handlers for steer/cancel delivery.
+  const activeTurns = new Map<string, ActiveTurnController>();
 
   const emitStage = (
     context: {
@@ -527,6 +695,7 @@ export function createInteractiveSessionActor(
     const cutoff = now() - agentCacheIdleMs;
     for (const [threadId, entry] of agentCache) {
       if (entry.lastUsedAt < cutoff) {
+        evictedThreads.add(threadId);
         await disposeAgentEntry(threadId);
       }
     }
@@ -540,6 +709,7 @@ export function createInteractiveSessionActor(
     for (const [threadId, entry] of agentCache) {
       if (activeDurableThreads.has(threadId)) continue;
       if (entry.lastUsedAt < cutoff) {
+        evictedThreads.add(threadId);
         await disposeAgentEntry(threadId);
       }
     }
@@ -558,6 +728,7 @@ export function createInteractiveSessionActor(
         }
       }
       if (!oldestThreadId) break;
+      evictedThreads.add(oldestThreadId);
       await disposeAgentEntry(oldestThreadId);
     }
   };
@@ -706,10 +877,18 @@ export function createInteractiveSessionActor(
       }
 
       const cached = agentCache.get(threadId);
+      const currentParamsKey = serializeModelParamsKey(
+        snapshot.effort,
+        snapshot.modelParams,
+      );
       const cacheCompatible =
         cached
         && cached.handle.model === snapshot.model
-        && cached.handle.workspaceRef === snapshot.workspaceRef;
+        && cached.handle.workspaceRef === snapshot.workspaceRef
+        && (cached.modelParamsKey ?? currentParamsKey) === currentParamsKey;
+      const previousCumulativeCostCents = cacheCompatible
+        ? cached?.lastCumulativeCostCents
+        : undefined;
 
       const agentStartedAt = now();
       if (cacheCompatible && cached) {
@@ -811,6 +990,11 @@ export function createInteractiveSessionActor(
       }
 
       const cursorAgentId = agentHandle.agentId ?? agentIdByThread.get(threadId) ?? null;
+      const sdkUsage = await agentHandle.readUsage?.().catch(() => undefined);
+      const { costUsd, cumulativeCostCents } = computeTurnCostFromSdkUsage(
+        sdkUsage,
+        previousCumulativeCostCents,
+      );
       await post({
         dispatchMessageId,
         kind: 'terminal',
@@ -818,7 +1002,7 @@ export function createInteractiveSessionActor(
         artifactsFlushed: true,
         cursorAgentId,
         durationMs: Math.max(0, now() - turnStartedAt),
-        ...tokenFieldsForTerminalIngest(result.usage),
+        ...tokenFieldsForTerminalIngest(result.usage, costUsd),
       });
       // Live terminal so the socket clears the spinner immediately; the durable
       // `done` (agent_run_events) covers reconnect replay, and the client's
@@ -826,7 +1010,14 @@ export function createInteractiveSessionActor(
       await publishLiveEvent({ type: 'done', runId });
 
       // Retain the live Agent for the next serialized turn on this thread.
-      agentCache.set(threadId, { handle: agentHandle, lastUsedAt: now() });
+      agentCache.set(threadId, {
+        handle: agentHandle,
+        lastUsedAt: now(),
+        modelParamsKey: currentParamsKey,
+        ...(cumulativeCostCents !== undefined
+          ? { lastCumulativeCostCents: cumulativeCostCents }
+          : {}),
+      });
       retainAgent = true;
       await evictOverflowAgents(threadId);
 
@@ -915,6 +1106,22 @@ export function createInteractiveSessionActor(
         runDurableTurn(request.threadId, request.bootstrap),
       );
     },
+    async steer(input: InteractiveSteerInput): Promise<HarnessSteerDisposition> {
+      const controller = activeTurns.get(input.threadId);
+      if (!controller || (input.runId && controller.runId !== input.runId)) {
+        return 'turn-ended';
+      }
+      return controller.handleSteer(input.commandId, input.text);
+    },
+    async cancel(
+      input: InteractiveCancelInput,
+    ): Promise<HarnessCancelDisposition> {
+      const controller = activeTurns.get(input.threadId);
+      if (!controller || (input.runId && controller.runId !== input.runId)) {
+        return 'turn-ended';
+      }
+      return controller.handleCancel(input.commandId);
+    },
     async disposeAll(): Promise<void> {
       const threadIds = new Set([
         ...warmCheckouts.keys(),
@@ -924,6 +1131,10 @@ export function createInteractiveSessionActor(
         await invalidateThread(threadId);
       }
       agentIdByThread.clear();
+      evictedThreads.clear();
+      lastWorkspacePathByThread.clear();
+      lastHostRevisionByThread.clear();
+      activeTurns.clear();
     },
   };
 
@@ -1003,14 +1214,30 @@ export function createInteractiveSessionActor(
     let workspaceMs: number | undefined;
     let agentAcquireMs: number | undefined;
     let agentMode: InteractiveTurnStageTimings['agentMode'];
+    let recreateReason: HarnessRecreateReason | undefined;
+    let clearCursorAgentId = false;
+    let storeRestoreStatus: AgentStoreRestoreStatus | null = null;
     let sendStartedAt: number | undefined;
     let firstEventAt: number | undefined;
     let firstTokenAt: number | undefined;
+
+    let phase: HarnessAgentPhase = 'starting';
+    let turnEnded = false;
+    let sendIssued = false;
+    const appliedControlDispositions = new Map<
+      string,
+      HarnessControlDisposition
+    >();
+    const pendingPromptSteers: Array<{ commandId: string; text: string }> = [];
+    const heldSummarySteers: Array<{ commandId: string; text: string }> = [];
+    const queuedRunningSteers: Array<{ commandId: string; text: string }> = [];
+    let cancelAckPromise: Promise<void> | null = null;
 
     const stageTimings = (): InteractiveTurnStageTimings => ({
       ...(workspaceMs !== undefined ? { workspaceMs } : {}),
       ...(agentAcquireMs !== undefined ? { agentAcquireMs } : {}),
       ...(agentMode ? { agentMode } : {}),
+      ...(recreateReason ? { recreateReason } : {}),
       ...(sendStartedAt !== undefined && firstEventAt !== undefined
         ? { firstEventMs: Math.max(0, firstEventAt - sendStartedAt) }
         : {}),
@@ -1021,8 +1248,180 @@ export function createInteractiveSessionActor(
     });
 
     const stopRun = async (): Promise<void> => {
-      if (activeRunRef?.cancel) await activeRunRef.cancel().catch(() => {});
+      if (activeRunRef?.cancel) {
+        await activeRunRef.cancel().catch(() => {});
+      } else if (agentHandle?.cancel) {
+        await agentHandle.cancel().catch(() => {});
+      }
     };
+
+    const publishControlAck = async (
+      commandId: string,
+      kind: 'steer' | 'cancel',
+      disposition: HarnessControlDisposition,
+    ): Promise<void> => {
+      if (!dependencies.controlBus) return;
+      await dependencies.controlBus
+        .publishAck({
+          threadId,
+          runId,
+          commandId,
+          kind,
+          disposition,
+          timestamp: new Date(now()).toISOString(),
+        })
+        .catch(() => {});
+    };
+
+    const postCancelAckOnce = (): Promise<void> => {
+      if (!cancelAckPromise) {
+        cancelAckPromise = dependencies
+          .postIngest(projectId, runId, {
+            dispatchMessageId,
+            attemptId,
+            kind: 'cancel_ack',
+            detail: 'Interactive turn stopped',
+          })
+          .then(
+            () => undefined,
+            () => undefined,
+          );
+      }
+      return cancelAckPromise;
+    };
+
+    const applySdkSteer = async (text: string): Promise<void> => {
+      if (agentHandle?.steer) {
+        await agentHandle.steer(text);
+      }
+    };
+
+    const flushHeldSummarySteers = async (): Promise<void> => {
+      if (heldSummarySteers.length === 0) return;
+      const toFlush = heldSummarySteers.splice(0, heldSummarySteers.length);
+      if (cancellationRequested || fenceConflict) return;
+      for (const item of toFlush) {
+        try {
+          await applySdkSteer(item.text);
+          appliedControlDispositions.set(item.commandId, 'steered');
+          await publishControlAck(item.commandId, 'steer', 'steered');
+        } catch {
+          // Best-effort flush; do not disrupt summary cleanup.
+        }
+      }
+    };
+
+    const flushQueuedRunningSteers = async (): Promise<void> => {
+      if (queuedRunningSteers.length === 0) return;
+      const toFlush = queuedRunningSteers.splice(0, queuedRunningSteers.length);
+      if (cancellationRequested || fenceConflict) return;
+      for (const item of toFlush) {
+        try {
+          await applySdkSteer(item.text);
+        } catch {
+          // Best-effort flush.
+        }
+      }
+    };
+
+    const handleSteer = async (
+      commandId: string,
+      text: string,
+    ): Promise<HarnessSteerDisposition> => {
+      const existing = appliedControlDispositions.get(commandId);
+      if (existing && existing !== 'cancelled') {
+        return existing;
+      }
+      if (turnEnded || cancellationRequested || fenceConflict) {
+        await publishControlAck(commandId, 'steer', 'turn-ended');
+        return 'turn-ended';
+      }
+      if (phase === 'summarizing') {
+        heldSummarySteers.push({ commandId, text });
+        appliedControlDispositions.set(commandId, 'held');
+        await publishControlAck(commandId, 'steer', 'held');
+        return 'held';
+      }
+      if (
+        !sendIssued &&
+        (phase === 'starting' || phase === 'resuming' || phase === 'recreating')
+      ) {
+        pendingPromptSteers.push({ commandId, text });
+        appliedControlDispositions.set(commandId, 'merged');
+        await publishControlAck(commandId, 'steer', 'merged');
+        return 'merged';
+      }
+      if (phase === 'running' || sendIssued) {
+        appliedControlDispositions.set(commandId, 'steered');
+        if (activeRunRef && agentHandle?.steer) {
+          await applySdkSteer(text);
+        } else if (sendIssued && !activeRunRef) {
+          queuedRunningSteers.push({ commandId, text });
+        } else {
+          await applySdkSteer(text);
+        }
+        await publishControlAck(commandId, 'steer', 'steered');
+        return 'steered';
+      }
+      await publishControlAck(commandId, 'steer', 'turn-ended');
+      return 'turn-ended';
+    };
+
+    const handleCancel = async (
+      commandId: string,
+    ): Promise<HarnessCancelDisposition> => {
+      const existing = appliedControlDispositions.get(commandId);
+      if (existing === 'cancelled') {
+        return 'cancelled';
+      }
+      if (turnEnded) {
+        await publishControlAck(commandId, 'cancel', 'turn-ended');
+        return 'turn-ended';
+      }
+      appliedControlDispositions.set(commandId, 'cancelled');
+      cancellationRequested = true;
+      await stopRun();
+      if (!absoluteAbort.signal.aborted) {
+        absoluteAbort.abort(new InteractiveCancellationObservedError());
+      }
+      await postCancelAckOnce();
+      await publishControlAck(commandId, 'cancel', 'cancelled');
+      return 'cancelled';
+    };
+
+    const dispatchPendingControls = async (
+      items: ReadonlyArray<HarnessPendingControl>,
+    ): Promise<void> => {
+      for (const item of items) {
+        if (item.kind === 'steer' && typeof item.text === 'string') {
+          await handleSteer(item.commandId, item.text);
+        } else if (item.kind === 'cancel') {
+          await handleCancel(item.commandId);
+        }
+      }
+    };
+
+    const dispatchControlMessage = async (
+      message: HarnessControlMessage,
+    ): Promise<void> => {
+      if (message.runId !== runId) return;
+      if (message.kind === 'steer') {
+        await handleSteer(message.commandId, message.text);
+      } else if (message.kind === 'cancel') {
+        await handleCancel(message.commandId);
+      }
+    };
+
+    activeTurns.set(threadId, {
+      runId,
+      handleSteer,
+      handleCancel,
+    });
+    const unsubscribeControl = dependencies.controlBus
+      ? dependencies.controlBus.subscribeControl(threadId, (message) => {
+          void dispatchControlMessage(message);
+        })
+      : () => {};
 
     const clearEventTimers = (): void => {
       if (firstEventTimer !== undefined) {
@@ -1121,9 +1520,15 @@ export function createInteractiveSessionActor(
           attemptId,
           dispatchMessageId,
         });
+        if (response.pendingControl && response.pendingControl.length > 0) {
+          await dispatchPendingControls(response.pendingControl);
+        }
         if (response.cancelRequested && body.kind !== 'cancel_ack') {
           cancellationRequested = true;
           await stopRun();
+          if (!absoluteAbort.signal.aborted) {
+            absoluteAbort.abort(new InteractiveCancellationObservedError());
+          }
         }
       } catch (error) {
         if (error instanceof AiRunFenceConflictError) {
@@ -1167,7 +1572,9 @@ export function createInteractiveSessionActor(
         status: 'running',
         detail,
       };
+      const eventId = randomUUID();
       await publishLive(threadId, createCursorRunEventEnvelope({
+        eventId,
         threadId,
         runId,
         sourceInstance,
@@ -1182,6 +1589,7 @@ export function createInteractiveSessionActor(
         phase,
         status: 'running',
         detail,
+        eventId,
         event,
       }).catch(() => {});
     };
@@ -1222,7 +1630,12 @@ export function createInteractiveSessionActor(
       await evictIdleDurableAgents(now() - agentCacheIdleMs);
       // A worktree from an earlier commit still counts against the disk budget.
       const cachedForThread = agentCache.get(threadId);
-      if (cachedForThread && cachedForThread.handle.workspaceRef !== destination) {
+      if (
+        cachedForThread &&
+        (cachedForThread.handle.workspaceRef !== destination ||
+          (cachedForThread.groundingSha ?? null) !==
+            (specification.grounding?.sha ?? null))
+      ) {
         await disposeAgentEntry(threadId);
       }
       const workspaceStartedAt = now();
@@ -1292,13 +1705,35 @@ export function createInteractiveSessionActor(
 
       const cached = agentCache.get(threadId);
       const currentSourcesSignature = brainstormSourceIdsSignature(bootstrap);
+      const currentParamsKey = serializeModelParamsKey(
+        specification.effort,
+        specification.modelParams,
+      );
       const cacheCompatible =
         cached &&
         cached.handle.model === specification.model &&
         cached.handle.workspaceRef === checkout.workspacePath &&
+        (cached.modelParamsKey ?? currentParamsKey) === currentParamsKey &&
+        (cached.groundingSha ?? null) === (specification.grounding?.sha ?? null) &&
         (cached.handle.interviewPhase ?? null) ===
           (specification.guidedInterview?.phase ?? null) &&
         (cached.brainstormSourcesSignature ?? '') === currentSourcesSignature;
+      const previousCumulativeCostCents = cacheCompatible
+        ? cached?.lastCumulativeCostCents
+        : undefined;
+
+      const wasIdleEvicted = evictedThreads.delete(threadId);
+      const previousWorkspacePath = lastWorkspacePathByThread.get(threadId);
+      const workspaceChanged = Boolean(
+        previousWorkspacePath && previousWorkspacePath !== checkout.workspacePath,
+      );
+      const currentRevision = resolveHostRevision();
+      const previousRevision = lastHostRevisionByThread.get(threadId);
+      const hostRevisionChanged = Boolean(
+        previousRevision &&
+          currentRevision &&
+          previousRevision !== currentRevision,
+      );
 
       const startAcquisition = (
         resumeAgentId: string | null,
@@ -1316,6 +1751,9 @@ export function createInteractiveSessionActor(
                   prompt: specification.currentPrompt,
                   model: specification.model,
                   effort: specification.effort ?? undefined,
+                  ...(specification.modelParams !== undefined
+                    ? { modelParams: specification.modelParams }
+                    : {}),
                   workspaceRef: checkout.workspacePath,
                   workflowClass: 'agent_home_chat',
                   skillPath: specification.skill?.path ?? '',
@@ -1355,6 +1793,12 @@ export function createInteractiveSessionActor(
           knownAgentId && !unresumableAgentIds.has(knownAgentId)
             ? knownAgentId
             : null;
+        phase = resumeAgentId ? 'resuming' : 'starting';
+        if (resumeAgentId) {
+          storeRestoreStatus = await agentStoreSync
+            .restoreAgentStore(threadId, checkout.workspacePath)
+            .catch(() => 'missing' as const);
+        }
         const acquireStartedAt = now();
         const acquisition = startAcquisition(resumeAgentId);
         try {
@@ -1362,15 +1806,35 @@ export function createInteractiveSessionActor(
           agentHandle = acquired.handle;
           acquisitionMode = acquired.mode;
           agentAcquireMs = now() - acquireStartedAt;
+          if (acquisitionMode === 'recreated') {
+            recreateReason = resolveRecreateReason({
+              hadPriorBinding: Boolean(knownAgentId),
+              wasIdleEvicted,
+              workspaceChanged,
+              hostRevisionChanged,
+              storeRestoreStatus,
+              resumeReturnedNotFound:
+                Boolean(resumeAgentId) && storeRestoreStatus === 'restored',
+            });
+          }
           const durableArea = resolveChatAreaId(specification.workflowClass);
           logInteractiveAgentStep('InteractiveAgentAcquired', {
             runId,
             threadId,
             mode: acquired.mode,
             durationMs: now() - acquireStartedAt,
+            ...(recreateReason ? { recreateReason } : {}),
             ...(durableArea ? { area: durableArea } : {}),
           });
         } catch (error) {
+          if (isAdapterResumeStalledError(error)) {
+            clearCursorAgentId = true;
+            const stalledId = error.agentId || resumeAgentId;
+            if (stalledId) {
+              unresumableAgentIds.add(stalledId);
+              agentIdByThread.delete(threadId);
+            }
+          }
           if (absoluteAbort.signal.aborted) {
             void acquisition
               .then((late) => disposeAgentHandle(threadId, late.handle))
@@ -1389,6 +1853,9 @@ export function createInteractiveSessionActor(
           throw error;
         }
       }
+
+      lastWorkspacePathByThread.set(threadId, checkout.workspacePath);
+      lastHostRevisionByThread.set(threadId, currentRevision);
 
       if (agentHandle.agentId) {
         agentIdByThread.set(threadId, agentHandle.agentId);
@@ -1440,6 +1907,290 @@ export function createInteractiveSessionActor(
         await publishLive(threadId, envelope).catch(() => {});
         return envelope.eventId;
       };
+
+      // Explicit `operation: 'summarize'` turn (PBI-006 / VT-05).
+      if (specification.harness?.operation === 'summarize') {
+        if (pendingPromptSteers.length > 0) {
+          heldSummarySteers.push(
+            ...pendingPromptSteers.splice(0, pendingPromptSteers.length),
+          );
+        }
+        phase = 'summarizing';
+        sendStartedAt = now();
+        type SummaryOutcome = {
+          status: 'completed' | 'fallback' | 'error';
+          text?: string;
+        };
+        const summaryState: { outcome: SummaryOutcome | null } = {
+          outcome: null,
+        };
+        let summaryErrorPosted = false;
+
+        try {
+          await publishLiveEnvelope({ type: 'summary', status: 'running' });
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'summary',
+            status: 'running',
+            commandId: specification.turnId,
+          });
+
+          if (typeof agentHandle.summarize !== 'function') {
+            throw new Error('Agent handle does not support summarize');
+          }
+
+          const rawSummaryRun = await untilAborted(
+            agentHandle.summarize(),
+            absoluteAbort.signal,
+          );
+          if (
+            rawSummaryRun &&
+            typeof rawSummaryRun === 'object' &&
+            typeof (rawSummaryRun as WorkerCursorExecutionRun).stream ===
+              'function'
+          ) {
+            const summaryRun = rawSummaryRun as WorkerCursorExecutionRun;
+            activeRunRef = summaryRun;
+            const summaryResult = await untilAborted(
+              executeCursorExecutionCore({
+                snapshot: {
+                  prompt: specification.currentPrompt,
+                  model: specification.model,
+                  effort: specification.effort ?? undefined,
+                  workspaceRef: checkout.workspacePath,
+                  workflowClass: 'agent_home_chat',
+                  skillPath: specification.skill?.path ?? '',
+                  projectId: specification.projectId,
+                  threadId: specification.threadId,
+                },
+                run: summaryRun,
+                context: { runId, sourceInstance },
+                sink: {
+                  publish: async (event: SseEvent) => {
+                    if (fenceConflict) throw new AiRunFenceConflictError();
+                    if (cancellationRequested) {
+                      throw new InteractiveCancellationObservedError();
+                    }
+                    observeEvent();
+                    if (event.type === 'summary') {
+                      if (event.status === 'error') {
+                        summaryState.outcome = { status: 'error' };
+                      } else if (
+                        event.status === 'completed' ||
+                        event.status === 'fallback'
+                      ) {
+                        summaryState.outcome = {
+                          status: event.status,
+                          text: firstNonEmptySummaryText(
+                            summaryState.outcome?.text,
+                          ),
+                        };
+                      } else {
+                        await publishLiveEnvelope(event);
+                      }
+                    } else {
+                      await publishLiveEnvelope(event);
+                    }
+                  },
+                },
+                hooks: {
+                  beforeStreamEvent: () => {
+                    if (fenceConflict) throw new AiRunFenceConflictError();
+                    if (cancellationRequested) {
+                      throw new InteractiveCancellationObservedError();
+                    }
+                  },
+                  onSummaryCompleted: ({ text, fallback }) => {
+                    summaryState.outcome = {
+                      status: fallback ? 'fallback' : 'completed',
+                      text: firstNonEmptySummaryText(
+                        text,
+                        summaryState.outcome?.text,
+                      ),
+                    };
+                  },
+                },
+                nextSequence: () => 1,
+                failIfStreamEndsBeforeTurnEnd: false,
+              }),
+              absoluteAbort.signal,
+            );
+            const waitSummaryText = firstNonEmptySummaryText(
+              summaryResult.waitResult.result,
+              summaryResult.text,
+            );
+            const currentOutcome = summaryState.outcome;
+            if (!currentOutcome) {
+              if (isSuccessfulWait(summaryResult) && waitSummaryText) {
+                summaryState.outcome = {
+                  status: 'completed',
+                  text: waitSummaryText,
+                };
+              } else {
+                summaryState.outcome = { status: 'error' };
+              }
+            } else if (
+              currentOutcome.status === 'completed' ||
+              currentOutcome.status === 'fallback'
+            ) {
+              const mergedText = firstNonEmptySummaryText(
+                currentOutcome.text,
+                waitSummaryText,
+              );
+              summaryState.outcome =
+                isSuccessfulWait(summaryResult) && mergedText
+                  ? { status: currentOutcome.status, text: mergedText }
+                  : { status: 'error' };
+            }
+          } else if (typeof rawSummaryRun === 'string') {
+            const text = firstNonEmptySummaryText(rawSummaryRun);
+            summaryState.outcome = text
+              ? { status: 'completed', text }
+              : { status: 'error' };
+          } else if (rawSummaryRun && typeof rawSummaryRun === 'object') {
+            const obj = rawSummaryRun as {
+              status?: string;
+              text?: string;
+              summary?: string;
+              fallback?: boolean;
+            };
+            const status =
+              obj.status === 'error'
+                ? 'error'
+                : obj.fallback || obj.status === 'fallback'
+                  ? 'fallback'
+                  : 'completed';
+            const text = firstNonEmptySummaryText(obj.summary, obj.text);
+            summaryState.outcome =
+              status === 'error' || !text
+                ? { status: 'error' }
+                : { status, text };
+          } else {
+            summaryState.outcome = { status: 'error' };
+          }
+        } catch (summaryErr) {
+          if (
+            fenceConflict ||
+            summaryErr instanceof AiRunFenceConflictError ||
+            cancellationRequested ||
+            summaryErr instanceof InteractiveCancellationObservedError
+          ) {
+            throw summaryErr;
+          }
+          summaryState.outcome = { status: 'error' };
+          summaryErrorPosted = true;
+          await publishLiveEnvelope({ type: 'summary', status: 'error' });
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'summary',
+            status: 'error',
+            commandId: specification.turnId,
+          }).catch(() => {});
+        } finally {
+          phase = 'running';
+          await flushHeldSummarySteers();
+          clearEventTimers();
+          clearToolTimer();
+        }
+
+        const resolvedSummary =
+          summaryState.outcome &&
+          (summaryState.outcome.status === 'completed' ||
+            summaryState.outcome.status === 'fallback') &&
+          !firstNonEmptySummaryText(summaryState.outcome.text)
+            ? { status: 'error' as const }
+            : (summaryState.outcome ?? { status: 'error' as const });
+        if (resolvedSummary.status === 'error') {
+          if (!summaryErrorPosted) {
+            await publishLiveEnvelope({ type: 'summary', status: 'error' });
+            await post({
+              dispatchMessageId,
+              attemptId,
+              kind: 'summary',
+              status: 'error',
+              commandId: specification.turnId,
+            }).catch(() => {});
+          }
+          await agentStoreSync
+            .backupAgentStore(threadId, checkout.workspacePath)
+            .catch(() => 0);
+          await post({
+            dispatchMessageId,
+            attemptId,
+            kind: 'terminal',
+            status: 'failed',
+            detail: 'Could not summarize this conversation',
+            artifactsFlushed: false,
+            ...(recreateReason ? { recreateReason } : {}),
+            stageTimings: stageTimings(),
+          }).catch(() => {});
+          await publishLiveEnvelope({ type: 'done', runId });
+          return { status: 'failed' };
+        }
+
+        await publishLiveEnvelope({
+          type: 'summary',
+          status: resolvedSummary.status,
+        });
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'summary',
+          status: resolvedSummary.status,
+          ...(resolvedSummary.text !== undefined
+            ? { text: resolvedSummary.text }
+            : {}),
+          commandId: specification.turnId,
+        });
+
+        let summaryArtifacts: ReturnType<typeof unpackAttemptArtifactsResult> = {};
+        if (dependencies.uploadAttemptArtifacts) {
+          summaryArtifacts = unpackAttemptArtifactsResult(
+            await dependencies.uploadAttemptArtifacts(
+              bootstrap,
+              checkout.workspacePath,
+              absoluteAbort.signal,
+            ),
+          );
+        }
+
+        await agentStoreSync
+          .backupAgentStore(threadId, checkout.workspacePath)
+          .catch(() => 0);
+
+        await post({
+          dispatchMessageId,
+          attemptId,
+          kind: 'terminal',
+          status: 'completed',
+          artifactsFlushed: true,
+          artifactManifestRef: summaryArtifacts.artifactManifestRef,
+          ...(summaryArtifacts.inlineArtifacts
+            ? { inlineArtifacts: summaryArtifacts.inlineArtifacts }
+            : {}),
+          cursorAgentId: agentHandle.agentId ?? null,
+          ...(recreateReason ? { recreateReason } : {}),
+          stageTimings: stageTimings(),
+          durationMs: Math.max(0, now() - sendStartedAt),
+        });
+        await publishLiveEnvelope({ type: 'done', runId });
+
+        agentCache.set(threadId, {
+          handle: agentHandle,
+          lastUsedAt: now(),
+          brainstormSourcesSignature: currentSourcesSignature,
+          groundingSha: specification.grounding?.sha ?? null,
+          releaseWorkspace: checkout.dispose,
+        });
+        retainAgent = true;
+        await evictOverflowAgents(threadId);
+        return {
+          status: 'completed',
+          cursorAgentId: agentHandle.agentId ?? null,
+        };
+      }
 
       const durableBatcher = createInteractiveDurableStreamBatcher({
         persist: async ({ event, eventId }) => {
@@ -1502,22 +2253,42 @@ export function createInteractiveSessionActor(
       };
 
       try {
+        // Merge any steers that arrived during starting/resuming/recreating into the prompt.
+        if (pendingPromptSteers.length > 0) {
+          prompt = mergePendingSteersIntoPrompt(
+            prompt,
+            pendingPromptSteers.splice(0, pendingPromptSteers.length),
+          );
+        }
+        sendIssued = true;
+        phase = 'running';
+
         let turnEndMonitor = createCursorTurnEndMonitor();
-        const sendTurn = (
+        let latestAutoSummaryText: string | undefined;
+        const sendTurn = async (
           handle: InteractiveCursorAgentHandle,
           signal: AbortSignal = absoluteAbort.signal,
-        ) =>
-          untilAborted(
+        ): Promise<WorkerCursorExecutionRun> => {
+          latestAutoSummaryText = undefined;
+          const startedRun = await untilAborted(
             handle.send(prompt, {
               mcpServers,
               requestId: bootstrap.requestId ?? bootstrap.runId,
               onDelta: (update) => {
                 observeEvent();
+                const deltaSummary = extractDeltaSummaryText(update);
+                if (deltaSummary) {
+                  latestAutoSummaryText = deltaSummary;
+                }
                 turnEndMonitor.observe(update);
               },
             }),
             signal,
           );
+          activeRunRef = startedRun;
+          await flushQueuedRunningSteers();
+          return startedRun;
+        };
 
         const executeActiveRun = (
           signal: AbortSignal = absoluteAbort.signal,
@@ -1580,14 +2351,36 @@ export function createInteractiveSessionActor(
                     await publishLiveTokenBatches(
                       liveBatcher.push(event.text, now()),
                     );
-                  } else {
+                  } else if (event.type === 'summary') {
                     await publishLiveEnvelope(event);
+                    if (event.status === 'running') {
+                      phase = 'summarizing';
+                      await post({
+                        dispatchMessageId,
+                        attemptId,
+                        kind: 'summary',
+                        status: 'running',
+                      });
+                    } else if (event.status === 'error') {
+                      await post({
+                        dispatchMessageId,
+                        attemptId,
+                        kind: 'summary',
+                        status: 'error',
+                      });
+                      phase = 'running';
+                      await flushHeldSummarySteers();
+                    }
+                  } else {
+                    const eventId = randomUUID();
+                    await publishLiveEnvelope(event, eventId);
                     await post({
                       dispatchMessageId,
                       attemptId,
                       kind: 'progress',
                       phase: 'implementation',
                       status: 'running',
+                      eventId,
                       event,
                     });
                   }
@@ -1603,6 +2396,32 @@ export function createInteractiveSessionActor(
                     throw signal.reason instanceof Error
                       ? signal.reason
                       : new WarmAgentFirstEventStalledError();
+                  }
+                },
+                onSummaryCompleted: async ({ text, fallback }) => {
+                  const summaryText = firstNonEmptySummaryText(
+                    text,
+                    latestAutoSummaryText,
+                  );
+                  latestAutoSummaryText = undefined;
+                  try {
+                    // `@cursor/sdk` v1.4.0 emits auto-summary status events without
+                    // exposing the summary text on `send()`. Skip persistence when
+                    // text is absent rather than failing the live turn with 422.
+                    if (summaryText) {
+                      await post({
+                        dispatchMessageId,
+                        attemptId,
+                        kind: 'summary',
+                        status: fallback ? 'fallback' : 'completed',
+                        text: summaryText,
+                      });
+                    }
+                  } finally {
+                    phase = 'running';
+                    if (!fenceConflict && !cancellationRequested) {
+                      await flushHeldSummarySteers();
+                    }
                   }
                 },
               },
@@ -1648,12 +2467,15 @@ export function createInteractiveSessionActor(
           await disposeAgentHandle(threadId, dropped);
           armHardFirstEventTimer();
           const reacquireStartedAt = now();
+          phase = 'recreating';
           const reacquired = await untilAborted(
             startAcquisition(null),
             absoluteAbort.signal,
           );
           agentHandle = reacquired.handle;
           agentMode = 'recreated';
+          recreateReason = recreateReason ?? 'unknown';
+          phase = 'running';
           agentAcquireMs = now() - reacquireStartedAt;
           const durableArea = resolveChatAreaId(specification.workflowClass);
           logInteractiveAgentStep('InteractiveAgentAcquired', {
@@ -1667,6 +2489,7 @@ export function createInteractiveSessionActor(
           if (agentHandle.agentId) {
             agentIdByThread.set(threadId, agentHandle.agentId);
           }
+          await publishStartupPhase('analysis', INTERACTIVE_THINKING_DETAIL);
           turnEndMonitor = createCursorTurnEndMonitor();
           sendStartedAt = now();
         };
@@ -1849,22 +2672,29 @@ export function createInteractiveSessionActor(
               }
             : null;
         if (finalMessage) {
-          await publishLiveEnvelope({ type: 'message', message: finalMessage });
+          const messageEventId = randomUUID();
+          await publishLiveEnvelope(
+            { type: 'message', message: finalMessage },
+            messageEventId,
+          );
           await post({
             dispatchMessageId,
             attemptId,
             kind: 'progress',
+            eventId: messageEventId,
             event: { type: 'message', message: finalMessage },
           });
         }
 
-        let artifactManifestRef: AiRunBlobRef | undefined;
+        let uploadedArtifacts: ReturnType<typeof unpackAttemptArtifactsResult> = {};
         let artifactsFlushed = false;
         if (dependencies.uploadAttemptArtifacts) {
-          artifactManifestRef = await dependencies.uploadAttemptArtifacts(
-            bootstrap,
-            checkout.workspacePath,
-            absoluteAbort.signal,
+          uploadedArtifacts = unpackAttemptArtifactsResult(
+            await dependencies.uploadAttemptArtifacts(
+              bootstrap,
+              checkout.workspacePath,
+              absoluteAbort.signal,
+            ),
           );
           artifactsFlushed = true;
         }
@@ -1890,14 +2720,29 @@ export function createInteractiveSessionActor(
           });
         }
 
+        if (!result.runLeftUnsettled) {
+          await agentStoreSync
+            .backupAgentStore(threadId, checkout.workspacePath)
+            .catch(() => 0);
+        }
+
+        const sdkUsage = await agentHandle.readUsage?.().catch(() => undefined);
+        const { costUsd, cumulativeCostCents } = computeTurnCostFromSdkUsage(
+          sdkUsage,
+          previousCumulativeCostCents,
+        );
         await post({
           dispatchMessageId,
           attemptId,
           kind: 'terminal',
           status: 'completed',
           artifactsFlushed: true,
-          artifactManifestRef,
+          artifactManifestRef: uploadedArtifacts.artifactManifestRef,
+          ...(uploadedArtifacts.inlineArtifacts
+            ? { inlineArtifacts: uploadedArtifacts.inlineArtifacts }
+            : {}),
           cursorAgentId: reusableAgentId,
+          ...(recreateReason ? { recreateReason } : {}),
           ...(finalMessage
             ? { event: { type: 'message', message: finalMessage } }
             : {}),
@@ -1905,7 +2750,7 @@ export function createInteractiveSessionActor(
           ...(sendStartedAt !== undefined
             ? { durationMs: Math.max(0, now() - sendStartedAt) }
             : {}),
-          ...tokenFieldsForTerminalIngest(result.usage),
+          ...tokenFieldsForTerminalIngest(result.usage, costUsd),
         });
         await publishLiveEnvelope({ type: 'done', runId });
 
@@ -1919,7 +2764,12 @@ export function createInteractiveSessionActor(
         agentCache.set(threadId, {
           handle: agentHandle,
           lastUsedAt: now(),
+          modelParamsKey: currentParamsKey,
+          ...(cumulativeCostCents !== undefined
+            ? { lastCumulativeCostCents: cumulativeCostCents }
+            : {}),
           brainstormSourcesSignature: currentSourcesSignature,
+          groundingSha: specification.grounding?.sha ?? null,
           releaseWorkspace: checkout.dispose,
         });
         retainAgent = true;
@@ -1929,6 +2779,9 @@ export function createInteractiveSessionActor(
           cursorAgentId: agentHandle.agentId ?? null,
         };
       } finally {
+        if (heldSummarySteers.length > 0 && !cancellationRequested && !fenceConflict) {
+          await flushHeldSummarySteers();
+        }
         clearEventTimers();
         clearToolTimer();
       }
@@ -1943,13 +2796,27 @@ export function createInteractiveSessionActor(
         isStopRaceIngestError(error)
       ) {
         await disposeAgentEntry(threadId);
-        await post({
-          dispatchMessageId,
-          attemptId,
-          kind: 'cancel_ack',
-          detail: 'Interactive turn stopped',
-        });
+        await postCancelAckOnce();
+        await publishLive(
+          threadId,
+          createCursorRunEventEnvelope({
+            threadId,
+            runId,
+            sourceInstance,
+            sequence: (startupSequence += 1),
+            timestamp: new Date(now()).toISOString(),
+            event: { type: 'done', runId },
+          }),
+        ).catch(() => {});
         return { status: 'cancelled' };
+      }
+
+      if (isAdapterResumeStalledError(error)) {
+        clearCursorAgentId = true;
+        if (error.agentId) {
+          unresumableAgentIds.add(error.agentId);
+          agentIdByThread.delete(threadId);
+        }
       }
 
       await disposeAgentEntry(threadId);
@@ -1997,6 +2864,8 @@ export function createInteractiveSessionActor(
         detail,
         artifactsFlushed: false,
         ...(code ? { failureCategory: code } : {}),
+        ...(clearCursorAgentId ? { clearCursorAgentId: true } : {}),
+        ...(recreateReason ? { recreateReason } : {}),
         stageTimings: stageTimings(),
       }).catch(() => {});
       if (code) {
@@ -2012,6 +2881,11 @@ export function createInteractiveSessionActor(
       );
       return { status: 'failed' };
     } finally {
+      turnEnded = true;
+      unsubscribeControl();
+      if (activeTurns.get(threadId)?.runId === runId) {
+        activeTurns.delete(threadId);
+      }
       activeDurableThreads.delete(threadId);
       clearInterval(heartbeatTimer);
       recordHeartbeatGap(now());

@@ -588,9 +588,10 @@ export function useChatStream(
         failedRunIdRef.current = null;
         if (restartTimeoutRef.current !== null) {
           clearRestart();
-          setIsRetrying(false);
-          setRetryReason(null);
         }
+        setIsRetrying(false);
+        setRetryReason(null);
+        clearRetryTimeout();
       }
 
       switch (event.type) {
@@ -719,7 +720,7 @@ export function useChatStream(
               : prev
           );
           setProgressLabel((prev) =>
-            !prev || prev === 'Queued' || prev === 'Dispatched'
+            !prev || prev === 'Queued' || prev === 'Dispatched' || prev === 'Starting…'
               ? progressLabelForPhase('analysis', thinkingEvent.text)
               : prev
           );
@@ -735,6 +736,9 @@ export function useChatStream(
             setStatus((previous) =>
               previous === 'idle' ? 'running' : previous
             );
+            setIsRetrying(false);
+            setRetryReason(null);
+            clearRetryTimeout();
           }
           break;
         }

@@ -755,12 +755,13 @@ function App() {
         syncHomeThreadUrl(result.threadId);
       }
       if (options?.initialMessage) {
-        const res = await fetch(`/api/chat/threads/${result.threadId}/messages`, {
+        const res = await fetch(`/api/harness/threads/${result.threadId}/commands`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            turnId: createChatTurnId(),
+            commandId: createChatTurnId(),
+            kind: 'send',
             text: options.initialMessage,
             model: options.model ?? DEFAULT_MODEL_ID,
             ...(options.attachments?.length ? { attachments: options.attachments } : {}),
@@ -772,6 +773,19 @@ function App() {
             threadId: result.threadId,
             message: friendlyChatErrorMessage(typeof body?.error === 'string' ? body.error : null),
           });
+        } else {
+          const receipt = (await res.json().catch(() => null)) as {
+            status?: unknown;
+            reason?: unknown;
+          } | null;
+          if (receipt?.status === 'rejected') {
+            setFirstMessageError({
+              threadId: result.threadId,
+              message: friendlyChatErrorMessage(
+                typeof receipt.reason === 'string' ? receipt.reason : null,
+              ),
+            });
+          }
         }
       }
     } catch {

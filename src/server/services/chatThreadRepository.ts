@@ -152,6 +152,8 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
       savedWikiUrl: thread.savedWikiUrl ?? null,
       title: deriveTitle(thread),
       activeRunId: thread.activeRunId ?? null,
+      harnessArea: thread.harnessArea ?? null,
+      harnessVersion: thread.harnessVersion ?? null,
       createdAt: thread.createdAt,
       lastActivityAt: thread.lastActivityAt,
     })
@@ -169,6 +171,12 @@ export async function upsertThread(thread: ChatThread): Promise<void> {
         savedWikiUrl: thread.savedWikiUrl ?? null,
         title: deriveTitle(thread),
         activeRunId: thread.activeRunId ?? null,
+        ...(thread.harnessArea !== undefined
+          ? { harnessArea: thread.harnessArea }
+          : {}),
+        ...(thread.harnessVersion !== undefined
+          ? { harnessVersion: thread.harnessVersion }
+          : {}),
         lastActivityAt: thread.lastActivityAt,
       },
     });
@@ -501,6 +509,8 @@ export async function loadFullThread(threadId: string): Promise<ChatThread | nul
     groundedSha: result.groundedSha ?? null,
     skillSha256: result.skillSha256 ?? null,
     activeRunId: result.activeRunId ?? undefined,
+    harnessArea: (result.harnessArea as ChatThread['harnessArea']) ?? null,
+    harnessVersion: result.harnessVersion ?? null,
     workspaceDir: result.workspaceDir ?? '',
     lastError: result.lastError ?? undefined,
     savedWikiUrl: result.savedWikiUrl ?? undefined,

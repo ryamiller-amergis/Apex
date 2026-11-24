@@ -25,6 +25,7 @@ import type {
   SseEvent,
   SseErrorCode,
 } from '../../shared/types/chat';
+import type { HarnessAreaId } from '../../shared/types/chatHarness';
 import { isAzureWwwroot, resolveDataRoot } from '../utils/dataDir';
 import { buildPromptWithAttachments } from './attachmentPrompt';
 import {
@@ -1078,10 +1079,13 @@ async function enrichKickoffForInterviewWebResearch(
     }
     if (!interviewPaths.has(kickoff.skillPath)) return kickoff;
 
-    // Only activate web research when there is actually an MCP server configured to
-    // perform it. Setting webResearchEnabled without a tool gives the agent a
-    // scope carve-out but nothing to search with.
-    if (!cfg.interviewWebMcp) return kickoff;
+    // Only activate web research when there is actually an HTTP MCP server
+    // configured to perform it. Interactive V2 actors only proxy HTTP MCPs;
+    // attaching a stdio MCP pill here would reject every interview turn with
+    // INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED.
+    if (!cfg.interviewWebMcp || cfg.interviewWebMcp.transport !== 'http') {
+      return kickoff;
+    }
 
     return {
       ...kickoff,
@@ -3046,6 +3050,7 @@ export async function createThread(
     kickoffMessage?: string;
     workspaceDirOverride?: string;
     dependenciesPrepared?: boolean;
+    harness?: { area: HarnessAreaId; version: number };
   }
 ): Promise<ChatThread> {
   ensureDirs();
@@ -3096,6 +3101,12 @@ export async function createThread(
     status: 'idle',
     workspaceDir,
     flagged: false,
+    ...(options?.harness
+      ? {
+          harnessArea: options.harness.area,
+          harnessVersion: options.harness.version,
+        }
+      : {}),
     createdAt: new Date().toISOString(),
     lastActivityAt: new Date().toISOString(),
   };
@@ -5931,6 +5942,12 @@ async function sendMessageLegacy(
               markGuidedInterviewGrounding(state.thread.workspaceDir);
             }
             state.thread.activeRunId = getRunId(currentRun);
+            await publishRunEvent(state, agentRunId!, {
+              type: 'phase',
+              phase: 'analysis',
+              status: 'running',
+              detail: 'Thinking…',
+            });
             continue;
           }
 

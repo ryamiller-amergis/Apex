@@ -4,7 +4,7 @@
  */
 
 import type { DurableInteractiveTurnSpecification } from './durableInteractiveTurn';
-import type { EffortLevel } from './effort';
+import type { CursorModelParam, EffortLevel } from './effort';
 import type { PlaybookAgentRunPolicy } from './playbookExecutionCapability';
 import type { SkillProvider } from './projectSettings';
 
@@ -64,6 +64,8 @@ export interface ExecutionSnapshot {
   model: string;
   /** Reasoning effort frozen at thread kickoff; omitted to use the SDK/model default. */
   effort?: EffortLevel;
+  /** Resolved Cursor SDK model parameters frozen on App Service. */
+  modelParams?: ReadonlyArray<CursorModelParam>;
   /**
    * Writable Agent cwd (`.ai-pilot` scratch/outputs). For PRD/design-doc this is
    * the thin thread workspace — not a full repo clone.

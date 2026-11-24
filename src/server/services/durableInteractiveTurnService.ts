@@ -6,15 +6,17 @@ import type {
   ChatThread,
   ChatTurnSkill,
 } from '../../shared/types/chat';
-import type { EffortLevel } from '../../shared/types/effort';
+import type { CursorModelParam, EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
+import { BRAINSTORM_COLLABORATOR_INSTRUCTIONS } from './brainstormCollaboratorInstructions';
 import { isCabReleaseSkillPath } from '../../shared/utils/cabReleaseSkill';
 import type {
   DurableInteractiveTurnSpecification,
   FrozenBrainstormTurn,
   FrozenGuidedInterview,
+  FrozenHarnessSpec,
   FrozenInteractiveMcpDescriptor,
   FrozenInteractiveToolGrant,
   InteractiveCapability,
@@ -91,6 +93,20 @@ import {
 import type { BrainstormTurnSources } from '../../shared/types/brainstormSources';
 import { db } from '../db/drizzle';
 import { sql } from 'drizzle-orm';
+import {
+  buildRecreationPrompt,
+  type RecreationSummaryInput,
+} from './chatHarness/chatHarnessRecreation';
+import { getLatestNonFallbackSummary } from './chatHarness/chatHarnessSummaryStore';
+import { getAreaProfile } from './chatHarness/areaProfiles';
+import {
+  inferHarnessArea,
+  stampThreadHarnessIfMissing,
+} from './chatHarness/inferHarnessArea';
+import {
+  isHarnessAreaId,
+  type HarnessAreaId,
+} from '../../shared/types/chatHarness';
 
 const PLAYBOOK_INTERVIEW_STEP_FLAG = 'playbook-interview-step';
 const BACKGROUND_GROUNDING_FLAG = 'interview-background-grounding';
@@ -160,6 +176,7 @@ function sessionInstructions(
   return [
     ...INTERACTIVE_QUESTION_UI_LINES,
     ...(workflowClass === 'home-chat' ? HOME_CHAT_TURN_CONTRACT_LINES : []),
+    ...(workflowClass === 'brainstorm' ? [BRAINSTORM_COLLABORATOR_INSTRUCTIONS, ''] : []),
     ...(documentGuidance.length > 0 ? [...documentGuidance, ''] : []),
   ];
 }
@@ -191,6 +208,12 @@ export type AdmitDurableInteractiveTurnInput = Readonly<{
   internalContext?: string;
   /** Required for, and only for, workflow class `brainstorm`. */
   brainstorm?: FrozenBrainstormTurn;
+  /** Non-message turn operation (e.g. 'summarize' admits a run without a user chat_messages row). */
+  operation?: 'summarize';
+  /** Shared chat harness specification block resolved on App Service. */
+  harness?: FrozenHarnessSpec;
+  /** Optional area key context (e.g. PRD, brainstorm artifact, interview brief) for bounded recreation handoff. */
+  areaKeyContext?: string | null;
 }>;
 
 export type RetryDurableInteractiveTurnInput = Readonly<{
@@ -251,6 +274,14 @@ type ServiceDependencies = Readonly<{
     threadId: string,
   ) => Promise<ThreadAccessResult | null>;
   resolveSkillConfig: typeof resolveSkillConfig;
+  resolveModelChoice: (
+    model: string,
+    effort: EffortLevel | undefined,
+  ) => Promise<{
+    model: string;
+    effort: EffortLevel | undefined;
+    modelParams?: ReadonlyArray<CursorModelParam>;
+  }>;
   loadSkill: (
     input: LoadSkillInput,
   ) => Promise<{ path: string; content: string } | null>;
@@ -294,6 +325,16 @@ type ServiceDependencies = Readonly<{
   loadLinkedContext: (
     input: Readonly<{ threadId: string; userId: string }>,
   ) => Promise<string | null>;
+  /** Latest non-fallback conversation summary for bounded recreation handoff. */
+  loadLatestFullSummary: (
+    threadId: string,
+  ) => Promise<RecreationSummaryInput | null>;
+  /** Additive idempotent in-place stamp for pre-release unstamped threads (BR-012). */
+  stampThreadHarness: (
+    threadId: string,
+    area: HarnessAreaId,
+    version: number,
+  ) => Promise<boolean>;
   trackEvent: typeof trackEvent;
   now: () => Date;
 }>;
@@ -638,6 +679,9 @@ function selectedSkill(
   thread: ChatThread,
   turnSkill: ChatTurnSkill | undefined,
 ): ChatTurnSkill | null {
+  // Brainstorm instructions come from code (see sessionInstructions). A Brainstorm
+  // thread created before that change may still store an old skill path; ignore it.
+  if (thread.kickoff.agentModule === 'brainstorm') return null;
   const selectedPath = turnSkill?.path ?? thread.kickoff.skillPath;
   if (!selectedPath?.trim()) return null;
   // Skill paths are stored repository-root relative with a leading slash
@@ -729,6 +773,9 @@ function capabilityMetadata(
   maxviewEnabled: boolean,
 ): InteractiveClassificationInput['capabilityMetadata'] {
   const capabilities: InteractiveCapability[] = ['plain-chat'];
+  // Brainstorm turns call the artifact tool and source tools. Without a skill,
+  // this keeps them in the agentic class they had when the skill was attached.
+  if (thread.kickoff.agentModule === 'brainstorm') capabilities.push('tool-heavy');
   if (attachmentCount > 0) capabilities.push('attachments');
   if (
     thread.kickoff.mcpPill ||
@@ -765,10 +812,10 @@ function isStdioMcp(pill: QuickMcpPill | undefined): boolean {
   return pill?.transport === 'stdio';
 }
 
-function visibleTranscript(
+function allVisibleMessages(
   thread: ChatThread,
-): DurableInteractiveTurnSpecification['transcript'] {
-  const visible = thread.messages
+): Array<DurableInteractiveTurnSpecification['transcript'][number]> {
+  return thread.messages
     .filter(
       (message) =>
         (message.role === 'user' || message.role === 'agent') &&
@@ -782,6 +829,12 @@ function visibleTranscript(
       text: message.text,
       timestamp: message.ts,
     }));
+}
+
+function visibleTranscript(
+  thread: ChatThread,
+): DurableInteractiveTurnSpecification['transcript'] {
+  const visible = allVisibleMessages(thread);
   let retainedChars = visible.reduce(
     (total, message) => total + message.text.length,
     0,
@@ -909,38 +962,39 @@ function currentPrompt(
 
 function recreationPrompt(input: {
   thread: ChatThread;
-  transcript: DurableInteractiveTurnSpecification['transcript'];
+  messages: ReadonlyArray<DurableInteractiveTurnSpecification['transcript'][number]>;
   currentPrompt: string;
   repositoryContextPack: string | null;
+  latestFullSummary: RecreationSummaryInput | null;
+  areaKeyContext?: string | null;
 }): string {
-  const transcript = input.transcript.flatMap((entry, index) => [
-    `--- message ${index + 1} | role=${entry.role} | timestamp=${entry.timestamp} ---`,
-    entry.text,
-    '',
-  ]);
-  return [
+  const header = [
     '# Apex interactive turn',
     `Project: ${input.thread.kickoff.project}`,
     `Repository: ${input.thread.kickoff.repo}`,
-    ...(input.thread.kickoff.freeformContext
-      ? ['', '# Thread context', input.thread.kickoff.freeformContext]
-      : []),
-    ...(input.thread.kickoff.transcript
-      ? [
-          '',
-          '# Kickoff transcript',
-          KICKOFF_TRANSCRIPT_NOTE,
-          '',
-          input.thread.kickoff.transcript,
-        ]
-      : []),
-    ...(input.repositoryContextPack ? ['', input.repositoryContextPack] : []),
-    '',
-    '# Durable visible conversation',
-    ...transcript,
-    '# Current turn',
-    input.currentPrompt,
   ].join('\n');
+
+  const kickoffParts: string[] = [];
+  if (input.thread.kickoff.freeformContext) {
+    kickoffParts.push(`# Thread context\n${input.thread.kickoff.freeformContext}`);
+  }
+  if (input.thread.kickoff.transcript) {
+    kickoffParts.push(
+      `# Kickoff transcript\n${KICKOFF_TRANSCRIPT_NOTE}\n\n${input.thread.kickoff.transcript}`,
+    );
+  }
+  if (input.repositoryContextPack) {
+    kickoffParts.push(input.repositoryContextPack);
+  }
+
+  return buildRecreationPrompt({
+    header,
+    kickoffContext: kickoffParts.length > 0 ? kickoffParts.join('\n\n') : undefined,
+    areaKeyContext: input.areaKeyContext ?? null,
+    latestFullSummary: input.latestFullSummary,
+    messages: input.messages,
+    currentTurnBlock: input.currentPrompt,
+  });
 }
 
 type RepositoryContextDocuments = Readonly<{
@@ -1072,6 +1126,7 @@ function requestHash(input: {
   model: string;
   skill: DurableInteractiveTurnSpecification['skill'];
   attachments: DurableInteractiveTurnSpecification['currentMessage']['attachments'];
+  operation?: 'summarize';
 }): string {
   const canonical = {
     text: normalizeHashText(input.text),
@@ -1088,6 +1143,7 @@ function requestHash(input: {
       attachmentId: attachment.attachmentId,
       sha256: attachment.sha256,
     })),
+    ...(input.operation ? { operation: input.operation } : {}),
   };
   return createHash('sha256')
     .update(JSON.stringify(canonical), 'utf8')
@@ -1111,9 +1167,7 @@ async function defaultLoadSkill(
   if (hasSeparateSkillRepo(input.thread)) {
     pinnedReader = branchTipReader(input.thread);
   } else if (!input.grounding) {
-    // Brainstorm keeps its source checkouts separate from this turn, and still
-    // reads its skill from the Project Settings repository and branch.
-    if (!input.readBranchTip && input.thread.kickoff.agentModule !== 'brainstorm') {
+    if (!input.readBranchTip) {
       warnSkillUnavailable(input.skill.path, 'repository grounding is not ready');
       throw unavailableSkill();
     }
@@ -1499,12 +1553,26 @@ const lazyDefaultAttachmentStore: InteractiveAttachmentStore = {
   },
 };
 
+/**
+ * Reads the live model catalog to freeze `modelParams` into the specification.
+ * Loaded on first use so the durable admit module graph does not import the
+ * Cursor SDK (see interactiveV2NoFallback.test.ts).
+ */
+const lazyResolveModelChoice: ServiceDependencies['resolveModelChoice'] = async (
+  model,
+  effort,
+) => {
+  const { resolveCursorModelChoice } = await import('./modelsService');
+  return resolveCursorModelChoice(model, effort);
+};
+
 function defaultDependencies(): ServiceDependencies {
   return {
     repository: durableInteractiveTurnRepository,
     attachmentStore: lazyDefaultAttachmentStore,
     resolveThreadAccess,
     resolveSkillConfig,
+    resolveModelChoice: lazyResolveModelChoice,
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,
@@ -1520,8 +1588,52 @@ function defaultDependencies(): ServiceDependencies {
     loadInterviewContext: defaultLoadInterviewContext,
     loadReferenceSources: defaultLoadReferenceSources,
     loadLinkedContext: defaultLoadLinkedContext,
+    loadLatestFullSummary: async (threadId) => {
+      try {
+        return await getLatestNonFallbackSummary(threadId);
+      } catch {
+        return null;
+      }
+    },
+    stampThreadHarness: stampThreadHarnessIfMissing,
     trackEvent,
     now: () => new Date(),
+  };
+}
+
+function frozenHarnessFromProfile(
+  area: HarnessAreaId,
+  version: number | null | undefined,
+  operation?: 'summarize',
+): FrozenHarnessSpec {
+  const profile = getAreaProfile(area);
+  return {
+    area: profile.area,
+    version:
+      typeof version === 'number' && Number.isSafeInteger(version) && version > 0
+        ? version
+        : profile.version,
+    ...(operation ? { operation } : {}),
+    toolAllowlist: [...profile.toolAllowlist],
+    customTools: profile.customTools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      writes: tool.writes,
+      proxyTarget: tool.proxyTarget,
+    })),
+    writeConfirmation: profile.writeConfirmation.map(
+      ({ tool, writes, mode }) => ({
+        tool,
+        writes,
+        mode,
+      }),
+    ),
+    safety: {
+      repositoryCode: profile.safety.repositoryCode,
+      shell: profile.safety.shell,
+      settingSources: [],
+    },
   };
 }
 
@@ -1609,6 +1721,9 @@ export function createDurableInteractiveTurnService(
               .loadLinkedContext({ threadId: thread.id, userId: thread.userId })
               .catch(() => null)
           : Promise.resolve(null);
+      const latestFullSummaryLookup = deps
+        .loadLatestFullSummary(thread.id)
+        .catch(() => null);
       // @feature-flag:interview-background-grounding start winner=enabled
       const backgroundGroundingLookup = guidedInterviewLookup.then(
         (guided) =>
@@ -1647,7 +1762,7 @@ export function createDurableInteractiveTurnService(
         deps.builtInSkillRoots,
       );
       if (registration === 'unknown') throw unavailableSkill();
-      if (isStdioMcp(thread.kickoff.mcpPill)) {
+      if (isStdioMcp(thread.kickoff.mcpPill) && !thread.kickoff.webResearchEnabled) {
         throw new DurableInteractiveTurnError(
           'INTERACTIVE_V2_STDIO_MCP_UNSUPPORTED',
           422,
@@ -1823,10 +1938,20 @@ export function createDurableInteractiveTurnService(
           })
         : null;
 
-      const model =
+      const requestedModel =
         input.modelOverride?.trim() ||
         thread.kickoff.model?.trim() ||
         DEFAULT_MODEL;
+      const requestedEffort =
+        input.effort === undefined
+          ? thread.kickoff.effort ?? undefined
+          : input.effort ?? undefined;
+      const modelChoice = await deps.resolveModelChoice(
+        requestedModel,
+        requestedEffort,
+      );
+      const model = modelChoice.model;
+      const resolvedEffort: EffortLevel | null = modelChoice.effort ?? null;
       const loadedSkill = skill
         ? await deps.loadSkill({
             thread,
@@ -1878,9 +2003,44 @@ export function createDurableInteractiveTurnService(
             expiresAt,
           })
         : null;
+      const allMessages = allVisibleMessages(thread);
       const transcript = visibleTranscript(thread);
-      const messageText =
-        input.text.trim() || 'Uploaded files for context.';
+      const latestFullSummary = await latestFullSummaryLookup;
+      const isSummarizeOperation =
+        input.operation === 'summarize' ||
+        input.harness?.operation === 'summarize';
+      const resolvedHarnessOperation: 'summarize' | undefined =
+        isSummarizeOperation ? 'summarize' : undefined;
+      const frozenHarness: FrozenHarnessSpec | undefined = input.harness
+        ? {
+            ...input.harness,
+            ...(resolvedHarnessOperation
+              ? { operation: resolvedHarnessOperation }
+              : {}),
+          }
+        : isHarnessAreaId(thread.harnessArea)
+          ? frozenHarnessFromProfile(
+              thread.harnessArea,
+              thread.harnessVersion,
+              resolvedHarnessOperation,
+            )
+          : resolvedHarnessOperation
+            ? frozenHarnessFromProfile(
+                inferHarnessArea(thread),
+                null,
+                resolvedHarnessOperation,
+              )
+            : undefined;
+      if (!isHarnessAreaId(thread.harnessArea) && frozenHarness) {
+        await deps.stampThreadHarness(
+          thread.id,
+          frozenHarness.area,
+          frozenHarness.version,
+        );
+      }
+      const messageText = isSummarizeOperation
+        ? ''
+        : input.text.trim() || 'Uploaded files for context.';
       const resolvedSessionInstructions = sessionInstructions(
         thread,
         input.workflowClass,
@@ -1929,16 +2089,16 @@ export function createDurableInteractiveTurnService(
         interactiveClass: classification.interactiveClass,
         workflowClass: input.workflowClass,
         model,
-        effort:
-          input.effort === undefined
-            ? thread.kickoff.effort ?? null
-            : input.effort,
+        effort: resolvedEffort,
+        ...(modelChoice.modelParams !== undefined
+          ? { modelParams: modelChoice.modelParams }
+          : {}),
         skill: frozenSkill,
         currentMessage: {
           id: input.turnId,
           text: messageText,
-          hidden: Boolean(input.hidden),
-          attachments: immutableAttachments,
+          hidden: isSummarizeOperation ? true : Boolean(input.hidden),
+          attachments: isSummarizeOperation ? [] : immutableAttachments,
         },
         transcript,
         grounding,
@@ -1960,14 +2120,17 @@ export function createDurableInteractiveTurnService(
         currentPrompt: preparedCurrentPrompt,
         recreationPrompt: recreationPrompt({
           thread,
-          transcript,
+          messages: allMessages,
           currentPrompt: firstTurnPrompt,
           repositoryContextPack,
+          latestFullSummary,
+          areaKeyContext: input.areaKeyContext ?? null,
         }),
         deadlines,
         ...(guidedInterview ? { guidedInterview } : {}),
         ...(input.brainstorm ? { brainstorm: input.brainstorm } : {}),
         ...(referenceSources ? { referenceSources } : {}),
+        ...(frozenHarness ? { harness: frozenHarness } : {}),
       };
       const promptDoneAt = deps.now().getTime();
       const admitted = await deps.repository.admit({
@@ -1976,16 +2139,18 @@ export function createDurableInteractiveTurnService(
           text: input.text,
           model,
           skill: frozenSkill,
-          attachments: immutableAttachments,
+          attachments: isSummarizeOperation ? [] : immutableAttachments,
+          ...(isSummarizeOperation ? { operation: 'summarize' as const } : {}),
         }),
         threadId: input.threadId,
         userId: input.userId,
         projectId: thread.kickoff.project,
         interactiveClass: classification.interactiveClass,
         messageText,
-        hidden: Boolean(input.hidden),
-        attachments: immutableAttachments,
+        hidden: isSummarizeOperation ? true : Boolean(input.hidden),
+        attachments: isSummarizeOperation ? [] : immutableAttachments,
         specification,
+        ...(isSummarizeOperation ? { skipMessageInsert: true } : {}),
       });
       const admittedAt = deps.now().getTime();
       deps.trackEvent(

@@ -4,8 +4,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgentChatSession } from '../hooks/useAgentChatSession';
 import { useChatAttachments } from '../hooks/useChatAttachments';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import { InterviewAgentMessage } from './InterviewChatView';
-import { AgentComposer } from './agentChat';
+import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
+import type { HarnessTranscriptItem } from '../chatHarness/types';
 import styles from './PrdAssistantPanel.module.css';
 
 export interface AdrAssistantPanelProps {
@@ -38,7 +40,11 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const dragStartXRef = useRef(0);
   const dragStartWidthRef = useRef(DEFAULT_PANEL_WIDTH);
   const queryClient = useQueryClient();
-  const session = useAgentChatSession(threadId);
+  const session = useAgentChatSession(threadId, {
+    area: 'adr',
+    harnessArea: 'adr',
+  });
+  const modelPicker = useHarnessModelPicker();
   const {
     attachments,
     attachmentError,
@@ -46,7 +52,7 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
     removeAttachment,
     clearAttachments,
   } = useChatAttachments();
-  const { messages, streamingText, isRunning, isSending, showTypingIndicator } = session;
+  const { messages, streamingText, isRunning, isSending } = session;
   const wasRunning = useRef(false);
 
   const createThread = useCallback(async (forceNew = false) => {
@@ -121,21 +127,21 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
   const sendText = useCallback(async (messageText: string) => {
     const text = messageText.trim();
     if (!text) return;
-    await session.send(text);
-  }, [session]);
+    await session.send(text, { model: modelPicker.model });
+  }, [modelPicker.model, session]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const send = useCallback(async (messageInput?: string) => {
+    const text = (messageInput ?? input).trim();
     const outgoing = [...attachments];
     if (!text && outgoing.length === 0) return;
     const message = text || 'Please use the attached files as additional context.';
     setInput('');
-    const sent = await session.send(
-      message,
-      outgoing.length > 0 ? { attachments: outgoing } : undefined,
-    );
+    const sent = await session.send(message, {
+      model: modelPicker.model,
+      ...(outgoing.length > 0 ? { attachments: outgoing } : {}),
+    });
     if (sent && outgoing.length > 0) clearAttachments();
-  }, [attachments, clearAttachments, input, session]);
+  }, [attachments, clearAttachments, input, modelPicker.model, session]);
 
   if (!open) return null;
   const visibleMessages = messages.filter((message) =>
@@ -180,76 +186,103 @@ export const AdrAssistantPanel: React.FC<AdrAssistantPanelProps> = ({
             <button className={styles.closeBtn} type="button" aria-label="Close assistant" onClick={onClose} {...{ 'data-testid': 'adr-assistant-close-btn' }}>×</button>
           </div>
         </div>
-        <div className={styles.messages}>
-          <div className={styles.messageList}>
-            {isCreating && <div className={styles.initializing}>Starting assistant…</div>}
-            {createError && <div className={styles.messageBubbleSystem}>{createError}</div>}
-            {visibleMessages.map((message, index) => {
-              if (message.role === 'agent') {
-                return (
-                  <InterviewAgentMessage
-                    key={message.id}
-                    text={message.text}
-                    onSend={(text) => void sendText(text)}
-                    isRunning={isRunning}
-                    alreadyAnswered={index < lastUserMessageIndex}
-                    fullWidth
-                  />
-                );
-              }
-              return (
-                <div key={message.id} className={`${styles.messageBubble} ${
-                  message.role === 'user' ? styles.messageBubbleUser : styles.messageBubbleSystem
-                }`}>
-                  {message.text}
-                </div>
-              );
-            })}
-            {showTypingIndicator && (
-              <div className={styles.typingIndicator} aria-label="Assistant is thinking">
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-                <span className={styles.typingDot} />
-              </div>
-            )}
-            {streamingText && (
-              <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-        <AgentComposer
-          className={styles.composerEmbed}
-          value={input}
-          onChange={setInput}
-          onSend={() => void send()}
-          onCancel={isRunning ? () => void session.cancel() : undefined}
-          disabled={!threadId || isCreating || isRunning || isSending}
-          isRunning={isRunning}
-          isSending={isSending}
-          allowEmptySend
-          placeholder={isRunning ? 'Assistant is investigating…' : 'Ask about refinements or trade-offs…'}
+        <AgentHarnessPanel
+          area="adr"
+          session={{
+            ...session,
+            snapshotLoaded:
+              isCreating || Boolean(createError) || !threadId
+                ? true
+                : session.snapshotLoaded,
+          }}
+          items={visibleMessages}
           testIdPrefix="adr-assistant"
-          textareaRef={textareaRef}
-          attachments={attachments}
-          attachmentError={attachmentError}
-          onRemoveAttachment={removeAttachment}
-          onAttachClick={() => fileInputRef.current?.click()}
-          onPasteFiles={(files) => { void addFiles(files); }}
-          fileInput={(
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              hidden
-              onChange={(event) => { void handleAttachmentChange(event); }}
-              disabled={!threadId || isCreating || isRunning || isSending}
-              {...{ 'data-testid': 'adr-assistant-file-input' }}
-            />
+          testIds={{
+            root: 'adr-assistant-harness-panel',
+            composer: 'adr-assistant-composer',
+          }}
+          draft={input}
+          onDraftChange={setInput}
+          onSend={(text) => void send(text)}
+          onCancel={isRunning ? () => void session.cancel() : undefined}
+          renderTranscript={({ liveWorkBox }) => (
+            <div className={styles.messages}>
+              <div className={styles.messageList}>
+                {isCreating && <div className={styles.initializing}>Starting assistant…</div>}
+                {createError && <div className={styles.messageBubbleSystem}>{createError}</div>}
+                {visibleMessages.map((message, index) => {
+                  if (message.role === 'agent') {
+                    const harnessItem = message as HarnessTranscriptItem;
+                    return (
+                      <React.Fragment key={message.id}>
+                        {harnessItem.activity?.length || harnessItem.activityUnavailable ? (
+                          <AgentThoughtProcess
+                            items={harnessItem.activity}
+                            isUnavailable={harnessItem.activityUnavailable}
+                            testIdPrefix="adr-assistant"
+                            testIds={{
+                              drawer: 'adr-assistant-thought-process',
+                              toggle: 'adr-assistant-thought-process-toggle',
+                              thinking: `adr-assistant-saved-thinking-${message.id}`,
+                              steps: `adr-assistant-saved-steps-${message.id}`,
+                              toolGroup: `adr-assistant-saved-tool-group-${message.id}`,
+                            }}
+                          />
+                        ) : null}
+                        <InterviewAgentMessage
+                          text={message.text}
+                          onSend={(text) => void sendText(text)}
+                          isRunning={isRunning}
+                          alreadyAnswered={index < lastUserMessageIndex}
+                          fullWidth
+                        />
+                      </React.Fragment>
+                    );
+                  }
+                  return (
+                    <div key={message.id} className={`${styles.messageBubble} ${
+                      message.role === 'user' ? styles.messageBubbleUser : styles.messageBubbleSystem
+                    }`}>
+                      {message.text}
+                    </div>
+                  );
+                })}
+                {liveWorkBox}
+                {streamingText && (
+                  <div className={`${styles.messageBubble} ${styles.messageBubbleAssistant}`}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
           )}
-          {...{ 'data-testid': 'adr-assistant-composer' }}
+          composer={{
+            ...modelPicker,
+            disabled: !threadId || isCreating || isSending,
+            allowEmptySend: true,
+            placeholder: isRunning
+              ? 'Send a follow-up while the agent works…'
+              : 'Ask about refinements or trade-offs…',
+            textareaRef,
+            attachments,
+            attachmentError,
+            onRemoveAttachment: removeAttachment,
+            onAttachClick: () => fileInputRef.current?.click(),
+            onPasteFiles: (files) => { void addFiles(files); },
+            fileInput: (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => { void handleAttachmentChange(event); }}
+                disabled={!threadId || isCreating || isRunning || isSending}
+                {...{ 'data-testid': 'adr-assistant-file-input' }}
+              />
+            ),
+          }}
+          {...{ 'data-testid': 'adr-assistant-harness-panel' }}
         />
       </div>
     </>

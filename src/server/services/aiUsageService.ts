@@ -9,7 +9,7 @@
  */
 import { db } from '../db/drizzle';
 import { adrs, aiPricing, aiUsageEvents, designDocs, interviews, prds } from '../db/schema';
-import { and, desc, eq, gt, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   RecordUsageInput,
   AiFeature,
@@ -147,7 +147,112 @@ export async function lookupPricing(provider: string, modelId: string, at: Date)
   return null;
 }
 
-/** Compute cost in USD from token counts and the pricing catalog. */
+const OBSERVED_RATE_TTL_MS = 5 * 60 * 1000;
+const observedCursorRateCache = new Map<
+  string,
+  { ratePerTokenUsd: number | null; expiresAt: number }
+>();
+
+export function resetObservedCursorRateCacheForTests(): void {
+  observedCursorRateCache.clear();
+}
+
+/**
+ * Derives an observed USD-per-token rate for a Cursor model directly from
+ * recent real `cursor_usage_events` telemetry (never hardcoded or seeded).
+ * Returns `null` when no recent usage events with cost and tokens exist yet.
+ */
+export async function lookupObservedCursorRatePerTokenUsd(
+  modelId: string,
+): Promise<number | null> {
+  const key = modelId.trim();
+  if (!key) return null;
+  const now = Date.now();
+  const cached = observedCursorRateCache.get(key);
+  if (cached && now < cached.expiresAt) return cached.ratePerTokenUsd;
+
+  if (typeof db.execute !== 'function') return null;
+  try {
+    const candidates = modelIdPricingCandidates(key);
+    const primary = candidates[0];
+    const base = candidates[1] ?? primary;
+    const result = await db.execute<{
+      total_cents: string | null;
+      total_tokens: string | null;
+    }>(sql`
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(charged_cents::numeric, 0) > 0 THEN charged_cents::numeric
+              ELSE COALESCE(total_model_cents::numeric, 0)
+            END
+          ),
+          0
+        ) AS total_cents,
+        COALESCE(
+          SUM(
+            COALESCE(input_tokens, 0)
+            + COALESCE(output_tokens, 0)
+            + COALESCE(cache_read_tokens, 0)
+            + COALESCE(cache_write_tokens, 0)
+          ),
+          0
+        ) AS total_tokens
+      FROM cursor_usage_events
+      WHERE ts >= NOW() - INTERVAL '30 days'
+        AND (
+          model = ${primary}
+          OR model = ${base}
+          OR model LIKE ${`${base}-%`}
+        )
+    `);
+    const row = result?.rows?.[0];
+    const totalCents = parseFloat(row?.total_cents ?? '0');
+    const totalTokens = parseFloat(row?.total_tokens ?? '0');
+    const rate =
+      Number.isFinite(totalCents) &&
+      Number.isFinite(totalTokens) &&
+      totalCents > 0 &&
+      totalTokens > 0
+        ? totalCents / 100 / totalTokens
+        : null;
+    observedCursorRateCache.set(key, {
+      ratePerTokenUsd: rate,
+      expiresAt: now + OBSERVED_RATE_TTL_MS,
+    });
+    return rate;
+  } catch {
+    return null;
+  }
+}
+
+async function computeCatalogCost(opts: {
+  provider: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  at?: Date;
+}): Promise<number | null> {
+  const pricing = await lookupPricing(opts.provider, opts.modelId, opts.at ?? new Date());
+  if (!pricing) return null;
+
+  const M = 1_000_000;
+  return (
+    (opts.inputTokens / M) * pricing.inputPerMtok +
+    (opts.outputTokens / M) * pricing.outputPerMtok +
+    ((opts.cacheReadTokens ?? 0) / M) * pricing.cacheReadPerMtok +
+    ((opts.cacheWriteTokens ?? 0) / M) * pricing.cacheWritePerMtok
+  );
+}
+
+/**
+ * Compute cost in USD from token counts. Uses `ai_pricing` when a catalog row
+ * exists, and for Cursor models without a catalog row falls back to the live
+ * observed per-token rate from recent `cursor_usage_events`.
+ */
 export async function computeCost(opts: {
   provider: string;
   modelId: string;
@@ -157,16 +262,23 @@ export async function computeCost(opts: {
   cacheWriteTokens?: number;
   at?: Date;
 }): Promise<number> {
-  const pricing = await lookupPricing(opts.provider, opts.modelId, opts.at ?? new Date());
-  if (!pricing) return 0;
+  const catalogCost = await computeCatalogCost(opts);
+  if (catalogCost !== null) return catalogCost;
 
-  const M = 1_000_000;
-  return (
-    (opts.inputTokens / M) * pricing.inputPerMtok +
-    (opts.outputTokens / M) * pricing.outputPerMtok +
-    ((opts.cacheReadTokens ?? 0) / M) * pricing.cacheReadPerMtok +
-    ((opts.cacheWriteTokens ?? 0) / M) * pricing.cacheWritePerMtok
-  );
+  if (opts.provider === 'cursor') {
+    const totalTokens =
+      opts.inputTokens +
+      opts.outputTokens +
+      (opts.cacheReadTokens ?? 0) +
+      (opts.cacheWriteTokens ?? 0);
+    if (totalTokens > 0) {
+      const observedRate = await lookupObservedCursorRatePerTokenUsd(opts.modelId);
+      if (observedRate !== null && observedRate > 0) {
+        return totalTokens * observedRate;
+      }
+    }
+  }
+  return 0;
 }
 
 function usageInsertValues(
@@ -233,6 +345,8 @@ export async function recordCursorChatUsage(opts: {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Runtime-reported cost in USD (e.g. from Cursor SDK `agent.getUsage().cost`). */
+  reportedCostUsd?: number;
   /** 'exact' when the runtime reported usage; defaults to the chars/4 estimate. */
   tokenSource?: AiTokenSource;
   durationMs: number;
@@ -240,14 +354,42 @@ export async function recordCursorChatUsage(opts: {
 }): Promise<void> {
   const entity = await resolveUsageEntityFromThread(opts.threadId);
   const tokenSource = opts.tokenSource ?? 'estimated';
-  const costUsd = await computeCost({
-    provider: 'cursor',
-    modelId: opts.modelId,
-    inputTokens: opts.inputTokens,
-    outputTokens: opts.outputTokens,
-    cacheReadTokens: opts.cacheReadTokens,
-    cacheWriteTokens: opts.cacheWriteTokens,
-  });
+  const hasReportedCost =
+    opts.reportedCostUsd !== undefined &&
+    Number.isFinite(opts.reportedCostUsd) &&
+    opts.reportedCostUsd > 0;
+  let costUsd = 0;
+  let costSource: RecordUsageInput['costSource'] = 'estimated';
+  if (hasReportedCost) {
+    costUsd = opts.reportedCostUsd!;
+    costSource = 'computed';
+  } else {
+    const catalogCost = await computeCatalogCost({
+      provider: 'cursor',
+      modelId: opts.modelId,
+      inputTokens: opts.inputTokens,
+      outputTokens: opts.outputTokens,
+      cacheReadTokens: opts.cacheReadTokens,
+      cacheWriteTokens: opts.cacheWriteTokens,
+    });
+    if (catalogCost !== null && catalogCost > 0) {
+      costUsd = catalogCost;
+      costSource = tokenSource === 'exact' ? 'computed' : 'estimated';
+    } else {
+      const totalTokens =
+        opts.inputTokens +
+        opts.outputTokens +
+        (opts.cacheReadTokens ?? 0) +
+        (opts.cacheWriteTokens ?? 0);
+      if (totalTokens > 0) {
+        const observedRate = await lookupObservedCursorRatePerTokenUsd(opts.modelId);
+        if (observedRate !== null && observedRate > 0) {
+          costUsd = totalTokens * observedRate;
+        }
+      }
+      costSource = 'estimated';
+    }
+  }
   recordAiUsage({
     provider: 'cursor',
     modelId: opts.modelId,
@@ -267,9 +409,7 @@ export async function recordCursorChatUsage(opts: {
     cacheWriteTokens: opts.cacheWriteTokens,
     tokenSource,
     costUsd,
-    // Exact tokens are computed only when the catalog produced a price.
-    // A catalog miss stays estimated so the usage strip can show Cost pending.
-    costSource: tokenSource === 'exact' && costUsd > 0 ? 'computed' : 'estimated',
+    costSource,
     durationMs: opts.durationMs,
     status: opts.status,
   });

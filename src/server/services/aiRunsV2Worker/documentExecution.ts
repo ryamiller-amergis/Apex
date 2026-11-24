@@ -18,6 +18,7 @@ import {
 import type { BackgroundWorkflowClass } from '../../../shared/types/backgroundWorkflow';
 import type { RepoReader } from '../../../shared/types/repoReader';
 import {
+  computeTurnCostFromSdkUsage,
   CursorExecutionWaitError,
   executeCursorExecutionCore,
   type CursorExecutionResult,
@@ -510,6 +511,9 @@ function executionSnapshot(
     ...(specification.effort === null
       ? {}
       : { effort: specification.effort }),
+    ...(specification.modelParams !== undefined
+      ? { modelParams: specification.modelParams }
+      : {}),
     workspaceRef: workspacePath,
     ...(specification.groundedSha
       ? { groundedSha: specification.groundedSha }
@@ -772,11 +776,25 @@ export function createDocumentExecute(
           contentType: 'text/markdown; charset=utf-8',
         });
       }
+      const sdkUsage = await execution?.readUsage?.().catch(() => undefined);
+      const { costUsd } = computeTurnCostFromSdkUsage(sdkUsage);
+      const usageWithCost =
+        result.usage || costUsd !== undefined
+          ? {
+              ...(result.usage ?? {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+              }),
+              ...(costUsd !== undefined ? { costUsd } : {}),
+            }
+          : undefined;
       return {
         files,
         durationMs: Math.max(0, now() - startedAt),
         ...(result.text.trim() ? { detail: result.text.trim().slice(0, 500) } : {}),
-        ...(result.usage ? { usage: result.usage } : {}),
+        ...(usageWithCost ? { usage: usageWithCost } : {}),
       };
     } catch (error) {
       if (error instanceof CursorExecutionWaitError) {

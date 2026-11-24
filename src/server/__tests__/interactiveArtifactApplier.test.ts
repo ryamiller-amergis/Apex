@@ -6,6 +6,7 @@ import { collectInteractiveArtifacts } from '../services/interactiveActorHost/in
 import {
   InteractiveArtifactApplyError,
   applyInteractiveArtifacts,
+  verifyInlineInteractiveArtifacts,
 } from '../services/interactiveArtifactApplier';
 import type { AiRunV2ArtifactManifest } from '../../shared/types/aiRunV2';
 
@@ -179,5 +180,43 @@ describe('interactiveArtifactApplier', () => {
         reader: { readFile: async () => body },
       }),
     ).rejects.toBeInstanceOf(InteractiveArtifactApplyError);
+  });
+
+  it('verifies inline local-dev artifacts and rejects checksum mismatches or path escapes', () => {
+    const body = Buffer.from('# Transcript\nSaved locally', 'utf8');
+    const sha256 = createHash('sha256').update(body).digest('hex');
+
+    const verified = verifyInlineInteractiveArtifacts([
+      {
+        path: '.ai-pilot/kickoff-transcript.md',
+        contentBase64: body.toString('base64'),
+        sha256,
+      },
+    ]);
+    expect(verified).toHaveLength(1);
+    expect(verified[0]).toEqual({
+      path: '.ai-pilot/kickoff-transcript.md',
+      body,
+    });
+
+    expect(() =>
+      verifyInlineInteractiveArtifacts([
+        {
+          path: '.ai-pilot/kickoff-transcript.md',
+          contentBase64: body.toString('base64'),
+          sha256: '0'.repeat(64),
+        },
+      ]),
+    ).toThrow(InteractiveArtifactApplyError);
+
+    expect(() =>
+      verifyInlineInteractiveArtifacts([
+        {
+          path: '../secrets.env',
+          contentBase64: body.toString('base64'),
+          sha256,
+        },
+      ]),
+    ).toThrow(InteractiveArtifactApplyError);
   });
 });

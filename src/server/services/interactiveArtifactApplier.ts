@@ -10,9 +10,12 @@ import type {
   AiRunV2ArtifactManifest,
   AiRunV2ArtifactManifestEntry,
 } from '../../shared/types/aiRunV2';
+import type { InlineInteractiveArtifact } from '../../shared/types/aiRunIngest';
 
 const ALLOWED_TRANSCRIPT = path.posix.join('.ai-pilot', 'kickoff-transcript.md');
 const ALLOWED_OUTPUT_PREFIX = path.posix.join('.ai-pilot', 'output');
+const MAX_INLINE_ARTIFACT_FILES = 50;
+const MAX_INLINE_ARTIFACT_TOTAL_BYTES = 5 * 1024 * 1024;
 
 export class InteractiveArtifactApplyError extends Error {
   constructor(message: string) {
@@ -167,4 +170,50 @@ export function createBlobInteractiveArtifactReader(
       return download(entry.ref);
     },
   };
+}
+
+/**
+ * Decode, allowlist-check, and checksum-verify inline local-dev artifacts.
+ * Writes nothing.
+ */
+export function verifyInlineInteractiveArtifacts(
+  entries: readonly InlineInteractiveArtifact[],
+): VerifiedInteractiveArtifact[] {
+  if (entries.length > MAX_INLINE_ARTIFACT_FILES) {
+    throw new InteractiveArtifactApplyError(
+      `Inline artifact count exceeds limit (${MAX_INLINE_ARTIFACT_FILES})`,
+    );
+  }
+  const files: VerifiedInteractiveArtifact[] = [];
+  let totalBytes = 0;
+  for (const entry of entries) {
+    if (
+      !entry ||
+      typeof entry.path !== 'string' ||
+      typeof entry.contentBase64 !== 'string' ||
+      typeof entry.sha256 !== 'string'
+    ) {
+      throw new InteractiveArtifactApplyError('Invalid inline artifact entry');
+    }
+    const relativePath = assertAllowedPath(
+      entry.path.startsWith('.ai-pilot/')
+        ? entry.path
+        : path.posix.join('.ai-pilot', entry.path),
+    );
+    const body = Buffer.from(entry.contentBase64, 'base64');
+    totalBytes += body.byteLength;
+    if (totalBytes > MAX_INLINE_ARTIFACT_TOTAL_BYTES) {
+      throw new InteractiveArtifactApplyError(
+        `Inline artifacts exceed ${MAX_INLINE_ARTIFACT_TOTAL_BYTES} byte limit`,
+      );
+    }
+    const digest = createHash('sha256').update(body).digest('hex');
+    if (digest !== entry.sha256) {
+      throw new InteractiveArtifactApplyError(
+        `Artifact checksum mismatch for ${entry.path}`,
+      );
+    }
+    files.push({ path: relativePath, body });
+  }
+  return files;
 }

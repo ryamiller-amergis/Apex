@@ -18,6 +18,7 @@ import type { InterviewSkillOption, ProjectSkillConfig } from '../../../shared/t
 import { BUILD_INTAKE_SEED_TURN_ID, prepareBuildIntakeTurn } from '../buildIntakeService';
 import { findBuildByPlaybookRun, linkBuildInterview, type BuildForPlaybookRun } from '../buildOrchestrator/store';
 import { createThread, sendMessage } from '../chatAgentService';
+import { getAreaProfile } from '../chatHarness/areaProfiles';
 import { isFeatureEnabled } from '../featureFlagService';
 import { createInterview } from '../interviewService';
 import { resolveSkillConfig } from '../projectSettingsService';
@@ -171,7 +172,12 @@ export async function executeInterviewStep(
     },
   };
 
-  const thread = await createThread(context.initiatorUserId, kickoff, { skipAutoKickoff: true });
+  const area = isBuildIntake ? 'build-intake' : 'interview';
+  const harnessProfile = getAreaProfile(area);
+  const thread = await createThread(context.initiatorUserId, kickoff, {
+    skipAutoKickoff: true,
+    harness: { area: harnessProfile.area, version: harnessProfile.version },
+  });
   const interview = await createInterview({
     userId: context.initiatorUserId,
     project: context.project,

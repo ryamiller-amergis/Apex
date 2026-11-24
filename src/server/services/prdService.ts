@@ -361,12 +361,22 @@ export async function listPrds(
   const settingsNameEntries = await Promise.all(uniqueSettingsIds.map(async (id) => [id, await getSkillSettingsName(id)] as const));
   const settingsNameMap = new Map(settingsNameEntries);
 
-  const skillConfigByKey = new Map<string, Awaited<ReturnType<typeof resolveSkillConfig>>>();
-  await Promise.all(rows.map(async ({ prd }) => {
+  const uniqueConfigKeys = new Map<string, { project: string; settingsId?: string }>();
+  for (const { prd } of rows) {
     const key = `${prd.project}::${prd.skillSettingsId ?? ''}`;
-    if (skillConfigByKey.has(key)) return;
-    skillConfigByKey.set(key, await resolveSkillConfig({ project: prd.project, settingsId: prd.skillSettingsId ?? undefined }));
-  }));
+    if (!uniqueConfigKeys.has(key)) {
+      uniqueConfigKeys.set(key, {
+        project: prd.project,
+        settingsId: prd.skillSettingsId ?? undefined,
+      });
+    }
+  }
+  const skillConfigByKey = new Map<string, Awaited<ReturnType<typeof resolveSkillConfig>>>();
+  await Promise.all(
+    [...uniqueConfigKeys.entries()].map(async ([key, lookup]) => {
+      skillConfigByKey.set(key, await resolveSkillConfig(lookup));
+    }),
+  );
 
   return rows.map(({ prd, reviewerDisplayName, authorDisplayName, prdOwnerId, prdOwnerDisplayName, prototypeStageEnabled, testCasesEnabled }) => {
     const skillConfig = skillConfigByKey.get(`${prd.project}::${prd.skillSettingsId ?? ''}`);

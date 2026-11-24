@@ -18,9 +18,10 @@ import { PrdAssistantPanel } from '../PrdAssistantPanel';
 
 // ── Module mocks ───────────────────────────────────────────────────────────────
 
-const mockUseChatStream = jest.fn();
-jest.mock('../../hooks/useChatStream', () => ({
-  useChatStream: (...args: unknown[]) => mockUseChatStream(...args),
+const mockUseChatRuntime = jest.fn();
+jest.mock('../../chatHarness', () => ({
+  ...jest.requireActual('../../chatHarness'),
+  useChatRuntime: (...args: unknown[]) => mockUseChatRuntime(...args),
 }));
 
 jest.mock('react-markdown', () => ({
@@ -29,18 +30,76 @@ jest.mock('react-markdown', () => ({
 }));
 jest.mock('remark-gfm', () => ({ __esModule: true, default: jest.fn() }));
 
+// The model dropdown fetches the model list; these tests count thread-route fetches only.
+jest.mock('../../hooks/useHarnessModelPicker', () => ({
+  useHarnessModelPicker: () => ({
+    model: 'composer-2.5',
+    models: [],
+    modelsLoading: false,
+    onModelChange: () => undefined,
+  }),
+}));
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-const idleStreamState = {
-  messages: [],
-  streamingText: '',
-  status: 'idle' as const,
+const idleRuntimeState = {
+  threadId: 'thread-123',
+  harnessArea: 'prd-assistant' as const,
+  snapshotLoaded: true,
+  snapshotError: null,
+  snapshotStatusCode: null,
+  canWrite: true,
+  connectionState: 'open' as const,
   isConnected: true,
+  hasConnectionError: false,
+  lastEventId: null,
+  status: 'idle' as 'idle' | 'running' | 'error' | 'closed',
+  activeRunId: null as string | null,
+  phase: 'idle' as 'idle' | 'starting' | 'resuming' | 'recreating' | 'running' | 'summarizing',
+  latestSummary: null,
+  summaryNotice: null,
+  messages: [],
+  optimisticMessages: [],
+  streamingText: '',
+  thinkingText: '',
+  toolProgress: [],
+  activity: [],
+  phaseEvents: [],
+  runHealth: null,
+  progressLabel: null,
+  progressPhase: null,
+  lastProgressAt: null,
   prdReady: false,
   backlogReady: false,
   isRetrying: false,
   retryReason: null,
+  retryableRunId: null,
+  groundingPreparation: null,
+  pendingCommands: [],
+  lastReceipt: null,
+  stopping: false,
+  lastFailure: null,
+  terminalRevision: 0,
 };
+
+function makeRuntimeReturn(overrides: Partial<typeof idleRuntimeState> = {}) {
+  const state = { ...idleRuntimeState, ...overrides };
+  return {
+    runtime: {
+      getDisplayedMessages: () => state.messages,
+      getState: () => state,
+      send: jest.fn().mockResolvedValue(null),
+      steer: jest.fn().mockResolvedValue(null),
+      summarize: jest.fn().mockResolvedValue(null),
+      cancel: jest.fn().mockResolvedValue(null),
+      retry: jest.fn().mockResolvedValue(null),
+      clearReceipt: jest.fn(),
+      clearFailure: jest.fn(),
+      refreshSnapshot: jest.fn().mockResolvedValue(null),
+    },
+    state,
+  };
+}
 
 function createWrapper(queryClient: QueryClient) {
   return ({ children }: { children: ReactNode }) => (
@@ -56,6 +115,7 @@ function renderPanel(
     open?: boolean;
     onClose?: jest.Mock;
     existingThreadId?: string | null;
+    proposal?: ReactNode;
   } = {},
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
@@ -73,8 +133,9 @@ function renderPanel(
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockUseChatStream.mockReturnValue(idleStreamState);
+  mockUseChatRuntime.mockReturnValue(makeRuntimeReturn());
   global.fetch = jest.fn().mockResolvedValue({
+    ok: true,
     json: () => Promise.resolve({ threadId: 'thread-new-1' }),
   } as unknown as Response);
 });
@@ -253,14 +314,14 @@ describe('React Query invalidation when agent run completes', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
 
     const { rerender } = render(
       <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
       { wrapper: createWrapper(queryClient) },
     );
 
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'idle' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'idle' }));
     act(() => {
       rerender(
         <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
@@ -278,14 +339,14 @@ describe('React Query invalidation when agent run completes', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'running' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
 
     const { rerender } = render(
       <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
       { wrapper: createWrapper(queryClient) },
     );
 
-    mockUseChatStream.mockReturnValue({ ...idleStreamState, status: 'idle' });
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'idle' }));
     act(() => {
       rerender(
         <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
@@ -303,7 +364,7 @@ describe('React Query invalidation when agent run completes', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
-    mockUseChatStream.mockReturnValue(idleStreamState);
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn());
 
     const { rerender } = render(
       <PrdAssistantPanel prdId="prd-test-1" open existingThreadId="thread-123" onClose={jest.fn()} />,
@@ -318,6 +379,56 @@ describe('React Query invalidation when agent run completes', () => {
 
     await new Promise((r) => setTimeout(r, 50));
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ── 6. Harness cutover & proposal slot (S8e / VT-31 / BR-001) ─────────────────
+
+describe('AgentHarnessPanel cutover & proposal slot', () => {
+  it('renders AgentHarnessPanel with prd-assistant area and harness controls', () => {
+    renderPanel({ open: true, existingThreadId: 'thread-123' });
+
+    const harness = screen.getByTestId('prd-assistant-harness-panel');
+    expect(harness).toHaveAttribute('data-harness-area', 'prd-assistant');
+    expect(screen.getByTestId('prd-assistant-transcript')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-composer')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-message-input')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-send-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('prd-assistant-composer-summarize')).not.toBeInTheDocument();
+  });
+
+  it('shows harness live work box, Stop, and Steer controls while running', () => {
+    mockUseChatRuntime.mockReturnValue(makeRuntimeReturn({ status: 'running' }));
+    renderPanel({ open: true, existingThreadId: 'thread-123' });
+
+    expect(screen.getByTestId('prd-assistant-streaming')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-agent-progress')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-agent-busy')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-stop-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-assistant-composer-steer')).toBeInTheDocument();
+  });
+
+  it('wires PRD diff review through slots.proposal without auto-approving writes (BR-001)', () => {
+    const acceptSpy = jest.fn();
+    renderPanel({
+      open: true,
+      existingThreadId: 'thread-123',
+      proposal: (
+        <div data-testid="prd-diff-review">
+          <span>Proposed PRD diff</span>
+          <button type="button" data-testid="prd-diff-accept" onClick={acceptSpy}>
+            Accept
+          </button>
+        </div>
+      ),
+    });
+
+    expect(screen.getByTestId('prd-assistant-slot-proposal')).toBeInTheDocument();
+    expect(screen.getByTestId('prd-diff-review')).toBeInTheDocument();
+    expect(acceptSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('prd-diff-accept'));
+    expect(acceptSpy).toHaveBeenCalledTimes(1);
   });
 });
 

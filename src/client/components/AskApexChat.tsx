@@ -2,7 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAskApex } from '../hooks/useAskApex';
+import { useHarnessModelPicker } from '../hooks/useHarnessModelPicker';
 import type { AskApexMessage } from '../hooks/useAskApex';
+import { AgentHarnessPanel, AgentThoughtProcess } from './agentChat';
 import styles from './AskApexChat.module.css';
 
 const WELCOME_MESSAGE =
@@ -16,7 +18,10 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const modelPicker = useHarnessModelPicker();
   const {
+    threadId,
+    session,
     messages,
     streamingText,
     status,
@@ -47,8 +52,8 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
     const text = inputText.trim();
     if (!text || status === 'streaming' || status === 'preparing') return;
     setInputText('');
-    sendMessage(text);
-  }, [inputText, status, sendMessage]);
+    sendMessage(text, { model: modelPicker.model });
+  }, [inputText, status, modelPicker.model, sendMessage]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -111,107 +116,231 @@ export const AskApexChat: React.FC<AskApexChatProps> = ({ onClose }) => {
           </button>
         </div>
 
-        <div className={styles.messages}>
-          <div className={`${styles.message} ${styles['message-welcome']}`}>
-            {WELCOME_MESSAGE}
-          </div>
-          {messages.map((msg: AskApexMessage) => (
-            <div
-              key={msg.id}
-              className={`${styles.message} ${
-                msg.role === 'user'
-                  ? styles['message-user']
-                  : styles['message-assistant']
-              }`}
-            >
-              {msg.role === 'assistant' ? (
-                <div className={styles['markdown-body']}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {msg.text}
-                  </ReactMarkdown>
+        {threadId && session ? (
+          <AgentHarnessPanel
+            area="ask-apex"
+            session={session}
+            testIdPrefix="ask-apex"
+            testIds={{
+              composerInput: 'ask-apex-input',
+              composerSend: 'ask-apex-send-button',
+              retry: 'ask-apex-retry-button',
+            }}
+            draft={inputText}
+            onDraftChange={setInputText}
+            onSend={(text) => sendMessage(text, { model: modelPicker.model })}
+            onRetry={retryFailedRun ?? undefined}
+            composer={{
+              ...modelPicker,
+              placeholder: session.isRunning
+                ? 'Send a follow-up while the agent works…'
+                : 'Ask a question...',
+              rows: 1,
+              autoFocus: true,
+              disabled: isPreparing,
+              textareaRef: inputRef,
+            }}
+            renderTranscript={({ liveWorkBox, streamingPreview, messageFailure }) => (
+              <div className={styles.messages}>
+                <div className={`${styles.message} ${styles['message-welcome']}`}>
+                  {WELCOME_MESSAGE}
                 </div>
-              ) : (
-                msg.text
-              )}
-            </div>
-          ))}
-          {isStreaming && streamingText && (
-            <div className={styles['streaming-indicator']}>
-              <div className={styles['markdown-body']}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {streamingText}
-                </ReactMarkdown>
+                {messages.map((msg: AskApexMessage) => (
+                  <div
+                    key={msg.id}
+                    data-message-id={msg.id}
+                    className={`${styles.message} ${
+                      msg.role === 'user'
+                        ? styles['message-user']
+                        : styles['message-assistant']
+                    }`}
+                  >
+                    {msg.role === 'assistant' ? (
+                      <>
+                        {msg.activity?.length || msg.activityUnavailable ? (
+                          <AgentThoughtProcess
+                            items={msg.activity}
+                            isUnavailable={msg.activityUnavailable}
+                            testIdPrefix="ask-apex"
+                            testIds={{
+                              drawer: 'ask-apex-thought-process',
+                              toggle: 'ask-apex-thought-process-toggle',
+                              thinking: `ask-apex-saved-thinking-${msg.id}`,
+                              steps: `ask-apex-saved-steps-${msg.id}`,
+                              toolGroup: `ask-apex-saved-tool-group-${msg.id}`,
+                            }}
+                          />
+                        ) : null}
+                        <div className={styles['markdown-body']}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {msg.text}
+                          </ReactMarkdown>
+                        </div>
+                      </>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
+                ))}
+                {liveWorkBox}
+                {streamingPreview}
+                {!liveWorkBox && !streamingPreview && isStreaming && streamingText && (
+                  <div className={styles['streaming-indicator']}>
+                    <div className={styles['markdown-body']}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {streamingText}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+                {!liveWorkBox && !streamingPreview && isStreaming && !streamingText && (
+                  <div className={styles['typing-dots']}>
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                )}
+                {isPreparing && (
+                  <div
+                    className={styles['typing-dots']}
+                    role="status"
+                    aria-live="polite"
+                    {...{ 'data-testid': 'ask-apex-preparing' }}
+                  >
+                    {preparationMessage}
+                  </div>
+                )}
+                {notice && (
+                  <p
+                    className={styles['run-notice']}
+                    role="status"
+                    {...{ 'data-testid': 'ask-apex-run-notice' }}
+                  >
+                    {notice}
+                  </p>
+                )}
+                {retryFailedRun ? (
+                  <button
+                    type="button"
+                    className={styles['retry-btn']}
+                    onClick={retryFailedRun}
+                    {...{ 'data-testid': 'ask-apex-retry-button' }}
+                  >
+                    Try again
+                  </button>
+                ) : session.lastFailure ? (
+                  messageFailure
+                ) : null}
+                <div ref={messagesEndRef} />
               </div>
-            </div>
-          )}
-          {isStreaming && !streamingText && (
-            <div className={styles['typing-dots']}>
-              <span />
-              <span />
-              <span />
-            </div>
-          )}
-          {isPreparing && (
-            <div
-              className={styles['typing-dots']}
-              role="status"
-              aria-live="polite"
-              {...{ 'data-testid': 'ask-apex-preparing' }}
-            >
-              {preparationMessage}
-            </div>
-          )}
-          {notice && (
-            <p
-              className={styles['run-notice']}
-              role="status"
-              {...{ 'data-testid': 'ask-apex-run-notice' }}
-            >
-              {notice}
-            </p>
-          )}
-          {retryFailedRun && (
-            <button
-              type="button"
-              className={styles['retry-btn']}
-              onClick={retryFailedRun}
-              {...{ 'data-testid': 'ask-apex-retry-button' }}
-            >
-              Try again
-            </button>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        <div className={styles['input-area']}>
-          <textarea
-            ref={inputRef}
-            className={styles['input-field']}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask a question..."
-            rows={1}
-            disabled={isBusy}
-            {...{ 'data-testid': 'ask-apex-input' }}
+            )}
+            {...{ 'data-testid': 'ask-apex-harness-panel' }}
           />
-          <button
-            className={styles['send-btn']}
-            onClick={handleSend}
-            disabled={!inputText.trim() || isBusy}
-            type="button"
-            aria-label="Send message"
-            {...{ 'data-testid': 'ask-apex-send-button' }}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-            >
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-            </svg>
-          </button>
-        </div>
+        ) : (
+          <>
+            <div className={styles.messages}>
+              <div className={`${styles.message} ${styles['message-welcome']}`}>
+                {WELCOME_MESSAGE}
+              </div>
+              {messages.map((msg: AskApexMessage) => (
+                <div
+                  key={msg.id}
+                  className={`${styles.message} ${
+                    msg.role === 'user'
+                      ? styles['message-user']
+                      : styles['message-assistant']
+                  }`}
+                >
+                  {msg.role === 'assistant' ? (
+                    <div className={styles['markdown-body']}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.text}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    msg.text
+                  )}
+                </div>
+              ))}
+              {isStreaming && streamingText && (
+                <div className={styles['streaming-indicator']}>
+                  <div className={styles['markdown-body']}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {streamingText}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+              {isStreaming && !streamingText && (
+                <div className={styles['typing-dots']}>
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              )}
+              {isPreparing && (
+                <div
+                  className={styles['typing-dots']}
+                  role="status"
+                  aria-live="polite"
+                  {...{ 'data-testid': 'ask-apex-preparing' }}
+                >
+                  {preparationMessage}
+                </div>
+              )}
+              {notice && (
+                <p
+                  className={styles['run-notice']}
+                  role="status"
+                  {...{ 'data-testid': 'ask-apex-run-notice' }}
+                >
+                  {notice}
+                </p>
+              )}
+              {retryFailedRun && (
+                <button
+                  type="button"
+                  className={styles['retry-btn']}
+                  onClick={retryFailedRun}
+                  {...{ 'data-testid': 'ask-apex-retry-button' }}
+                >
+                  Try again
+                </button>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className={styles['input-area']}>
+              <textarea
+                ref={inputRef}
+                className={styles['input-field']}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question..."
+                rows={1}
+                disabled={isBusy}
+                {...{ 'data-testid': 'ask-apex-input' }}
+              />
+              <button
+                className={styles['send-btn']}
+                onClick={handleSend}
+                disabled={!inputText.trim() || isBusy}
+                type="button"
+                aria-label="Send message"
+                {...{ 'data-testid': 'ask-apex-send-button' }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                >
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                </svg>
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </>
   );

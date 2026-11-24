@@ -30,6 +30,79 @@ jest.mock('../services/journeyAggregationService', () => ({
     runJourneyAggregationCycle: jest.fn(),
   })),
 }));
+jest.mock('../services/aiExperienceMetricsService', () => ({
+  getAiExperienceMetrics: jest.fn().mockResolvedValue({
+    window: '120d',
+    windowLabel: 'Last 4 months',
+    granularity: 'month',
+    project: null,
+    availableProjects: ['Apex'],
+    fromIso: '2026-07-19T00:00:00.000Z',
+    toIso: '2026-11-19T00:00:00.000Z',
+    generatedAt: '2026-11-19T00:00:00.000Z',
+    headline: {
+      conversationalMedianSec: 22.5,
+      conversationalTurns: 120,
+      generationMedianSec: 180,
+      generationRuns: 15,
+      successRatePct: 96,
+      totalRuns: 135,
+      firstTokenMedianMs: 1350,
+      firstTokenSamples: 40,
+      apiP95Ms: 280,
+      apiRequests: 5000,
+      totalCostUsd: 42.5,
+      cacheHitPct: 72.4,
+    },
+    modules: [],
+    conversationTrend: [],
+    generationTrend: [],
+    homeChatSplit: [],
+    stageTimings: {
+      sampleCount: 40,
+      ttftP50Ms: 1350,
+      ttftP90Ms: 2900,
+      firstEventP50Ms: 500,
+      workspaceP50Ms: 150,
+      acquireP50Ms: 220,
+      workerTurnP50Ms: 19000,
+      warmCount: 30,
+      resumedCount: 7,
+      recreatedCount: 3,
+      byArea: [],
+      trend: [],
+    },
+    reliability: {
+      totalRuns: 135,
+      completedRuns: 130,
+      failedRuns: 4,
+      cancelledRuns: 1,
+      successRatePct: 96,
+      queueWaitP50Sec: 0.5,
+      queueWaitP90Sec: 2.1,
+      terminalReasons: [],
+      trend: [],
+    },
+    apiExperience: {
+      totalRequests: 5000,
+      p50Ms: 45,
+      p95Ms: 280,
+      errorRatePct: 0.2,
+      clientErrors: 3,
+      trend: [],
+      slowestRoutes: [],
+    },
+    costAndQuality: {
+      totalCostUsd: 42.5,
+      totalInteractions: 135,
+      cacheHitPct: 72.4,
+      trend: [],
+      byModel: [],
+      ratings: { good: 10, needsImprovement: 1, bad: 0, total: 11, positiveRatePct: 90.9 },
+      flaggedThreads: { flagged: 1, total: 80, ratePct: 1.25 },
+    },
+  }),
+}));
 
 import express from 'express';
 import request from 'supertest';
@@ -322,5 +395,28 @@ describe('observability query routes', () => {
     );
     expect(badWindow.status).toBe(400);
     expect(badWindow.body.code).toBe('OBSERVABILITY_INVALID_QUERY');
+  });
+
+  it('serves GET /ai-experience with window and granularity validation', async () => {
+    const app = buildApp();
+
+    const okRes = await request(app).get(
+      '/api/platform-admin/observability/ai-experience?project=Apex&scopeProject=all&window=120d&granularity=month',
+    );
+    expect(okRes.status).toBe(200);
+    expect(okRes.body.window).toBe('120d');
+    expect(okRes.body.headline.firstTokenMedianMs).toBe(1350);
+
+    const badWindow = await request(app).get(
+      '/api/platform-admin/observability/ai-experience?project=Apex&window=999d',
+    );
+    expect(badWindow.status).toBe(400);
+    expect(badWindow.body.code).toBe('OBSERVABILITY_INVALID_QUERY');
+
+    const badGranularity = await request(app).get(
+      '/api/platform-admin/observability/ai-experience?project=Apex&granularity=hourly',
+    );
+    expect(badGranularity.status).toBe(400);
+    expect(badGranularity.body.code).toBe('OBSERVABILITY_INVALID_QUERY');
   });
 });

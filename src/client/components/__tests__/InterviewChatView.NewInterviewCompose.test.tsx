@@ -400,7 +400,7 @@ describe('NewInterviewCompose — title required', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/chat/threads/thread-abc/messages',
+        '/api/harness/threads/thread-abc/commands',
         expect.any(Object),
       );
     });
@@ -519,12 +519,13 @@ describe('NewInterviewCompose — title required', () => {
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
 
     const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
-      String(c[0]).includes('/api/chat/threads/thread-abc/messages'),
+      String(c[0]).includes('/api/harness/threads/thread-abc/commands'),
     );
     expect(messageCall).toBeDefined();
     const body = JSON.parse(messageCall![1].body);
+    expect(body.kind).toBe('send');
     expect(body.text).toBe('Tell me about the architecture');
-    expect(body.turnId).toMatch(
+    expect(body.commandId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
   });
@@ -540,8 +541,8 @@ describe('NewInterviewCompose — title required', () => {
       return { linkedContext: undefined, failures: [] };
     });
     (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
-      if (url.includes('/messages')) operationOrder.push('message');
-      return { ok: true, json: () => Promise.resolve({ ok: true }) };
+      if (url.includes('/commands')) operationOrder.push('message');
+      return { ok: true, json: () => Promise.resolve({ status: 'accepted' }) };
     });
 
     renderCompose();
@@ -590,7 +591,7 @@ describe('NewInterviewCompose — title required', () => {
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/chat/threads/thread-abc/messages',
+        '/api/harness/threads/thread-abc/commands',
         expect.any(Object),
       ),
     );
@@ -632,7 +633,7 @@ describe('NewInterviewCompose — title required', () => {
 
     await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
     expect(global.fetch).toHaveBeenCalledWith(
-      '/api/chat/threads/thread-abc/messages',
+      '/api/harness/threads/thread-abc/commands',
       expect.any(Object),
     );
     expect(mockNavigate).toHaveBeenCalledWith('/backlog/interview/iv-1', {
@@ -675,7 +676,7 @@ describe('NewInterviewCompose — title required', () => {
     );
 
     const messageCall = (global.fetch as jest.Mock).mock.calls.find((c) =>
-      String(c[0]).includes('/api/chat/threads/thread-abc/messages'),
+      String(c[0]).includes('/api/harness/threads/thread-abc/commands'),
     );
     expect(JSON.parse(messageCall![1].body).model).toBe('claude-opus-4-6');
   });
@@ -958,7 +959,7 @@ describe('NewInterviewCompose — Start Interview from Brainstorm', () => {
     fireEvent.click(screen.getByLabelText('Start interview'));
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/chat/threads/thread-abc/messages', expect.any(Object));
+      expect(global.fetch).toHaveBeenCalledWith('/api/harness/threads/thread-abc/commands', expect.any(Object));
     });
   });
 

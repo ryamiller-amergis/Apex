@@ -71,6 +71,56 @@ jest.mock('../../hooks/useChatStream', () => ({
   }),
 }));
 
+jest.mock('../../chatHarness', () => ({
+  useChatRuntime: () => ({
+    runtime: {
+      getDisplayedMessages: () => mockStreamState.messages,
+      clearReceipt: jest.fn(),
+      clearFailure: jest.fn(),
+      refreshSnapshot: jest.fn().mockResolvedValue(null),
+    },
+    state: {
+      threadId: 'thread-1',
+      harnessArea: null,
+      snapshotLoaded: true,
+      snapshotError: null,
+      snapshotStatusCode: null,
+      canWrite: true,
+      connectionState: 'open',
+      isConnected: true,
+      hasConnectionError: false,
+      lastEventId: null,
+      status: mockStreamState.status,
+      activeRunId: null,
+      phase: mockStreamState.status === 'running' ? 'thinking' : 'idle',
+      latestSummary: null,
+      summaryNotice: null,
+      messages: mockStreamState.messages,
+      optimisticMessages: [],
+      streamingText: mockStreamState.streamingText,
+      thinkingText: mockStreamState.thinkingText ?? '',
+      toolProgress: [],
+      activity: [],
+      phaseEvents: [],
+      runHealth: null,
+      progressLabel: mockStreamState.progressLabel ?? null,
+      progressPhase: mockStreamState.progressPhase ?? null,
+      lastProgressAt: null,
+      prdReady: false,
+      backlogReady: false,
+      isRetrying: false,
+      retryReason: null,
+      retryableRunId: null,
+      groundingPreparation: null,
+      pendingCommands: [],
+      lastReceipt: null,
+      stopping: false,
+      lastFailure: null,
+      terminalRevision: 0,
+    },
+  }),
+}));
+
 jest.mock('../../hooks/useChatThreads', () => ({
   useChatThread: () => ({
     data: mockChatThread,
@@ -470,7 +520,7 @@ describe('AdrChatView — delete', () => {
     renderAdrView();
 
     expect(screen.getByTestId('agent-run-status-queued')).toHaveTextContent(
-      'Queued',
+      'Starting…',
     );
   });
 

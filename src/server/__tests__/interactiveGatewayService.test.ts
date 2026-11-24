@@ -433,4 +433,58 @@ describe('attachInteractiveThreadStream', () => {
     );
     expect(frames[frames.length - 1]?.id).toBe('live-during-page-two');
   });
+
+  it('does not replay historical run events when reconnecting with lastEventId onto an idle thread', async () => {
+    const userMessage = {
+      id: 'user-1',
+      role: 'user' as const,
+      text: 'can you break down what is on the home page for the contact?',
+      ts: '2026-11-19T22:59:53.000Z',
+    };
+    const agentMessage = {
+      id: 'agent-1',
+      role: 'agent' as const,
+      text: 'Contact sees announcements and four widgets.',
+      ts: '2026-11-19T23:00:30.000Z',
+    };
+    const replayRunEventPage = jest.fn(async () => ({
+      events: [
+        envelope('old-thinking-1', 1, {
+          runId: 'run-1',
+          type: 'token',
+          event: { type: 'thinking', text: 'Checking Contact home widgets', seq: 1, runId: 'run-1' },
+        }),
+      ],
+      nextEventId: 'old-thinking-1',
+      hasMore: false,
+    }));
+    const deps = makeDeps({
+      loadThreadSnapshot: jest.fn(async () => ({
+        messages: [userMessage, agentMessage],
+        status: 'idle' as const,
+        eventDrivenTermination: true,
+      })),
+      replayRunEventPage,
+      replayRunEvents: undefined,
+    });
+    const { socket, frames } = makeSocket();
+
+    await attachInteractiveThreadStream(
+      socket,
+      't1',
+      { lastEventId: 'ephemeral-redis-done-id' },
+      deps
+    );
+
+    expect(replayRunEventPage).not.toHaveBeenCalled();
+    expect(frames.map((frame) => frame.data)).toEqual([
+      { type: 'message', message: userMessage },
+      { type: 'message', message: agentMessage },
+      {
+        type: 'status',
+        status: 'idle',
+        eventDrivenTermination: true,
+      },
+    ]);
+  });
 });

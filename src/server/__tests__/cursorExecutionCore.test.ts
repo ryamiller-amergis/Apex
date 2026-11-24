@@ -1,10 +1,13 @@
 import type { AgentRunEventEnvelope } from '../../shared/types/chat';
 import type { ExecutionSnapshot } from '../../shared/types/agentRunLifecycle';
 import {
+  computeTurnCostFromSdkUsage,
   createCursorTurnEndMonitor,
   CursorExecutionWaitError,
   CursorStreamClosedBeforeTurnEndError,
   executeCursorExecutionCore,
+  extractSdkCumulativeCostCents,
+  tokenFieldsForTerminalIngest,
   type CursorExecutionRun,
   type CursorExecutionWaitResult,
 } from '../services/cursorExecutionCore';
@@ -582,5 +585,55 @@ describe('cursor execution core token usage', () => {
         cacheWriteTokens: 3_000,
       });
     }
+  });
+
+  describe('SDK cost extraction and warm-agent turn delta', () => {
+    it('prefers positive chargedCents and falls back to rawCostCents', () => {
+      expect(
+        extractSdkCumulativeCostCents({
+          cost: { chargedCents: 12.5, rawCostCents: 15 },
+        }),
+      ).toBe(12.5);
+      expect(
+        extractSdkCumulativeCostCents({
+          cost: { chargedCents: 0, rawCostCents: 8.2 },
+        }),
+      ).toBe(8.2);
+      expect(extractSdkCumulativeCostCents({ cost: { chargedCents: 0, rawCostCents: 0 } })).toBeUndefined();
+      expect(extractSdkCumulativeCostCents(undefined)).toBeUndefined();
+    });
+
+    it('computes per-turn incremental USD cost across multiple warm-agent turns', () => {
+      const turn1 = computeTurnCostFromSdkUsage({ cost: { chargedCents: 10, rawCostCents: 10 } });
+      expect(turn1).toEqual({ costUsd: 0.1, cumulativeCostCents: 10 });
+
+      const turn2 = computeTurnCostFromSdkUsage(
+        { cost: { chargedCents: 24.5, rawCostCents: 24.5 } },
+        turn1.cumulativeCostCents,
+      );
+      expect(turn2.costUsd).toBeCloseTo(0.145, 6);
+      expect(turn2.cumulativeCostCents).toBe(24.5);
+
+      const noNewBillingYet = computeTurnCostFromSdkUsage(
+        { cost: { chargedCents: 24.5, rawCostCents: 24.5 } },
+        turn2.cumulativeCostCents,
+      );
+      expect(noNewBillingYet).toEqual({ cumulativeCostCents: 24.5 });
+    });
+
+    it('attaches costUsd override to terminal ingest token fields', () => {
+      expect(
+        tokenFieldsForTerminalIngest(
+          { inputTokens: 100, outputTokens: 50, cacheReadTokens: 20, cacheWriteTokens: 10 },
+          0.042,
+        ),
+      ).toEqual({
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 20,
+        cacheWriteTokens: 10,
+        costUsd: 0.042,
+      });
+    });
   });
 });

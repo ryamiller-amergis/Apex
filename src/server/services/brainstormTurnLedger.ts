@@ -419,6 +419,7 @@ export interface InteractiveTerminalInput {
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  costUsd?: number;
   durationMs?: number;
 }
 
@@ -513,14 +514,20 @@ export async function finalizeBrainstormTerminal(input: InteractiveTerminalInput
   const inputTokens = input.inputTokens ?? 0;
   const outputTokens = input.outputTokens ?? 0;
   if (inputTokens === 0 && outputTokens === 0) return;
-  const costUsd = await computeCost({
-    provider: 'cursor',
-    modelId: session.model,
-    inputTokens,
-    outputTokens,
-    cacheReadTokens: input.cacheReadTokens,
-    cacheWriteTokens: input.cacheWriteTokens,
-  }).catch(() => 0);
+  const hasReportedCost =
+    input.costUsd !== undefined &&
+    Number.isFinite(input.costUsd) &&
+    input.costUsd > 0;
+  const costUsd = hasReportedCost
+    ? input.costUsd!
+    : await computeCost({
+        provider: 'cursor',
+        modelId: session.model,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens: input.cacheReadTokens,
+        cacheWriteTokens: input.cacheWriteTokens,
+      }).catch(() => 0);
   recordAiUsage({
     ...brainstormUsageCtx(session.project, session.id, session.creatorId),
     provider: 'cursor',
@@ -533,7 +540,7 @@ export async function finalizeBrainstormTerminal(input: InteractiveTerminalInput
     cacheWriteTokens: input.cacheWriteTokens,
     tokenSource: 'exact',
     costUsd,
-    costSource: 'computed',
+    costSource: hasReportedCost ? 'computed' : 'estimated',
     durationMs: input.durationMs,
     status: input.status === 'completed' ? 'success' : input.status === 'cancelled' ? 'cancelled' : 'error',
   });
