@@ -6,7 +6,7 @@ import type {
   ChatThread,
   ChatTurnSkill,
 } from '../../shared/types/chat';
-import type { EffortLevel } from '../../shared/types/effort';
+import type { CursorModelParam, EffortLevel } from '../../shared/types/effort';
 import type { InteractiveWorkflowClass } from '../../shared/types/interactiveWorkflow';
 import type { FrozenBrainstormArtifact } from '../../shared/types/brainstormArtifact';
 import { skillNameFromPath, skillPathCandidates } from '../../shared/skillPaths';
@@ -48,7 +48,6 @@ import { readsThroughRepoReadService } from './repoRead/wholeProjectRepoRead';
 import { buildRepositoryContextPack } from './repositoryContextPack';
 import type { ThreadAccessResult } from './threadAccessService';
 import { resolveThreadAccess } from './threadAccessService';
-import { resolveCursorModelChoice } from './modelsService';
 import { resolveSkillConfig } from './projectSettingsService';
 import {
   buildDocumentAssistantEditGuidance,
@@ -275,7 +274,14 @@ type ServiceDependencies = Readonly<{
     threadId: string,
   ) => Promise<ThreadAccessResult | null>;
   resolveSkillConfig: typeof resolveSkillConfig;
-  resolveModelChoice: typeof resolveCursorModelChoice;
+  resolveModelChoice: (
+    model: string,
+    effort: EffortLevel | undefined,
+  ) => Promise<{
+    model: string;
+    effort: EffortLevel | undefined;
+    modelParams?: ReadonlyArray<CursorModelParam>;
+  }>;
   loadSkill: (
     input: LoadSkillInput,
   ) => Promise<{ path: string; content: string } | null>;
@@ -1547,13 +1553,26 @@ const lazyDefaultAttachmentStore: InteractiveAttachmentStore = {
   },
 };
 
+/**
+ * Reads the live model catalog to freeze `modelParams` into the specification.
+ * Loaded on first use so the durable admit module graph does not import the
+ * Cursor SDK (see interactiveV2NoFallback.test.ts).
+ */
+const lazyResolveModelChoice: ServiceDependencies['resolveModelChoice'] = async (
+  model,
+  effort,
+) => {
+  const { resolveCursorModelChoice } = await import('./modelsService');
+  return resolveCursorModelChoice(model, effort);
+};
+
 function defaultDependencies(): ServiceDependencies {
   return {
     repository: durableInteractiveTurnRepository,
     attachmentStore: lazyDefaultAttachmentStore,
     resolveThreadAccess,
     resolveSkillConfig,
-    resolveModelChoice: resolveCursorModelChoice,
+    resolveModelChoice: lazyResolveModelChoice,
     loadSkill: defaultLoadSkill,
     builtInSkillRoots: DEFAULT_BUILT_IN_SKILL_ROOTS,
     resolveGrounding: defaultResolveGrounding,

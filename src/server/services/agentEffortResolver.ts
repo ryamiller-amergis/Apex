@@ -212,7 +212,7 @@ export interface BuildCursorModelSelectionOptions {
 }
 
 /**
- * Builds the `model` selection object passed to Cursor SDK `Agent.create`.
+ * Builds the `model` selection object passed when a Cursor SDK agent is created.
  *
  * Accepts either:
  * - Pre-resolved `modelParams` (frozen by App Service via `resolveCursorModelChoice`),
