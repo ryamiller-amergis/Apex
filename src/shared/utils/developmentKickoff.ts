@@ -51,8 +51,43 @@ export function prefixDevelopmentSkillInvocation(
   return `${invocation}\n\n${prompt}`;
 }
 
+/** One file of a skill that Apex read from the skill repository. */
+export interface CloudAgentSkillBundleFile {
+  /** Path inside the skill folder, for example `SKILL.md` or `coordinator.md`. */
+  path: string;
+  content: string;
+}
+
+/** A skill read from the skill repository so the agent does not have to find it in its clone. */
+export interface CloudAgentSkillBundle {
+  skillName: string | null;
+  files: CloudAgentSkillBundleFile[];
+  /** Skill-folder files left out because of the size limits or a read error. */
+  omitted: string[];
+}
+
+export function buildSkillBundleSection(bundle: CloudAgentSkillBundle): string {
+  const label = bundle.skillName ?? 'selected';
+  const files = bundle.files.map((file) => [
+    `<skill-file path="${file.path}">`,
+    file.content.replace(/<\/skill-file/g, '<\\/skill-file'),
+    '</skill-file>',
+  ].join('\n'));
+  return [
+    `## Skill loaded by Apex`,
+    ``,
+    `Apex read the **${label}** skill from the project's skill repository and put its files below. Follow \`SKILL.md\` exactly. Do not search the repository for the skill: the repository you work in may not have it. Other files are named by their path inside the skill folder.`,
+    ...(bundle.omitted.length > 0
+      ? [``, `Not included (too large or unreadable): ${bundle.omitted.join(', ')}. Use them only if the repository has them.`]
+      : []),
+    ``,
+    ...files,
+  ].join('\n');
+}
+
 export function buildCloudDevelopmentKickoffSection(
   settings: ResolvedDevelopmentSettings,
+  options: { skillInlined?: boolean } = {},
 ): string {
   const skillLabel = settings.skillName ?? settings.skillPath;
   const headline = settings.configuredSkillPath
@@ -62,9 +97,11 @@ export function buildCloudDevelopmentKickoffSection(
     ? `Model override: \`${settings.model}\`.`
     : `Default model: \`${settings.model}\` (no model override).`;
   // An unconfigured default may not exist in the target repository.
-  const loadLine = settings.configuredSkillPath
-    ? `Load the skill from the repository and follow it exactly.`
-    : `Load the skill from the repository and follow it exactly if it exists there. If it does not, implement from the design artifacts below and follow the repository's existing conventions.`;
+  const loadLine = options.skillInlined
+    ? `Apex loaded the skill below ("Skill loaded by Apex"). Follow it exactly. Do not load it from the repository.`
+    : settings.configuredSkillPath
+      ? `Load the skill from the repository and follow it exactly.`
+      : `Load the skill from the repository and follow it exactly if it exists there. If it does not, implement from the design artifacts below and follow the repository's existing conventions.`;
 
   return [
     `## Development skill`,
@@ -74,6 +111,6 @@ export function buildCloudDevelopmentKickoffSection(
     `- ${modelLine}`,
     ``,
     loadLine,
-    `Run unit, e2e, and WCAG checks before opening a pull request.`,
+    `Run unit checks before opening a pull request. Do not run e2e or WCAG checks; this environment has no test database. Say in the PR description that they were not run.`,
   ].join('\n');
 }

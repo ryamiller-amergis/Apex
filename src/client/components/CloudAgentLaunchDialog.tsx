@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { skillNameFromPath } from '../../shared/skillPaths';
+import { normalizeRepoRelativePath, skillNameFromPath } from '../../shared/skillPaths';
 import type { CloudAgentSkillChoice } from '../../shared/types/devWorkbench';
 import {
   CLOUD_AGENT_CUSTOM_PROMPT_MAX_CHARS,
@@ -88,7 +88,15 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   onConfirm,
   'data-testid': dataTestId = 'cloud-agent-launch-dialog',
 }) => {
-  const skillChoices = skills.some((skill) => skill.path === defaultSkillPath) || !defaultSkillPath
+  // Skill paths from the repository start with "/", the default does not.
+  const matchedDefaultSkill = defaultSkillPath
+    ? skills.find((skill) => normalizeRepoRelativePath(skill.path) === normalizeRepoRelativePath(defaultSkillPath))
+    : undefined;
+  // Once the list has loaded, a default that is not in it is not offered:
+  // the agent could not find it either. Hidden pickers keep the default, and the server explains.
+  const defaultSkillMissing = chooseSkillAndModel && Boolean(defaultSkillPath) && skills.length > 0 && !matchedDefaultSkill;
+  const initialSkillPath = matchedDefaultSkill?.path ?? (defaultSkillMissing ? '' : defaultSkillPath);
+  const skillChoices = matchedDefaultSkill || !defaultSkillPath || defaultSkillMissing
     ? skills
     : [
       {
@@ -116,7 +124,7 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
   } = useForm<LaunchFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      skillPath: defaultSkillPath,
+      skillPath: initialSkillPath,
       model: defaultModel,
       task: defaultTask,
       customPrompt: defaultCustomPrompt,
@@ -125,12 +133,12 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
 
   useEffect(() => {
     reset({
-      skillPath: defaultSkillPath,
+      skillPath: initialSkillPath,
       model: defaultModel,
       task: defaultTask,
       customPrompt: defaultCustomPrompt,
     }, { keepDirtyValues: true });
-  }, [defaultCustomPrompt, defaultModel, defaultSkillPath, defaultTask, reset]);
+  }, [defaultCustomPrompt, defaultModel, initialSkillPath, defaultTask, reset]);
 
   const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose);
 
@@ -320,12 +328,18 @@ export const CloudAgentLaunchDialog: React.FC<CloudAgentLaunchDialogProps> = ({
               {...register('skillPath')}
               data-testid="cloud-agent-launch-skill"
             >
+              {defaultSkillMissing ? <option value="">Choose a skill</option> : null}
               {skillChoices.map((skill) => (
                 <option key={skill.path} value={skill.path}>
                   {skill.name}
                 </option>
               ))}
             </select>
+            {defaultSkillMissing ? (
+              <span className={styles.hint} data-testid="cloud-agent-launch-skill-missing">
+                {`The default skill (${skillNameFromPath(defaultSkillPath) ?? defaultSkillPath}) is not in this project's skill repository. Choose one from the list.`}
+              </span>
+            ) : null}
             {errors.skillPath ? <span className={styles.error}>{errors.skillPath.message}</span> : null}
           </label>
           <label className={styles.field}>

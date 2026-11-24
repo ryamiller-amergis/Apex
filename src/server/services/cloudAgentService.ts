@@ -23,7 +23,7 @@ import {
   type CloudAgentLaunchIntent,
 } from '../../shared/utils/cloudAgentLaunch';
 import { DEFAULT_DEVELOPMENT_MODEL } from '../../shared/utils/developmentKickoff';
-import { skillNameFromPath } from '../../shared/skillPaths';
+import { normalizeRepoRelativePath, skillNameFromPath } from '../../shared/skillPaths';
 import * as skillCatalog from './skillCatalogFacade';
 import type { ProjectSkillConfig, SkillProvider } from '../../shared/types/projectSettings';
 import {
@@ -86,10 +86,13 @@ import {
 } from './cloudAgentLeftoverWorkService';
 import {
   buildCloudDevelopmentKickoffSection,
+  buildSkillBundleSection,
   developmentCliSkillName,
   prefixDevelopmentSkillInvocation,
   resolveDevelopmentSettings,
+  type CloudAgentSkillBundle,
 } from '../../shared/utils/developmentKickoff';
+import { loadCloudAgentSkillBundle } from './cloudAgentSkillBundle';
 import {
   alignCloudAgentPullRequest,
   CLOUD_AGENT_PULL_REQUEST_LABEL,
@@ -678,6 +681,12 @@ export async function buildCloudAgentPrompt(input: {
         configuredModel: input.model?.trim() || null,
       }
     : configured;
+  const skillBundle = await loadSkillBundleForLaunch({
+    project: input.project,
+    skillPath: development.skillPath,
+    skillConfig,
+    required: Boolean(development.configuredSkillPath),
+  });
   const workItemTitle = input.workItemTitle?.trim() || `wi-${input.workItemId}`;
   const branchName = input.branchName?.trim()
     || (input.workItemType?.trim()
@@ -704,7 +713,7 @@ export async function buildCloudAgentPrompt(input: {
   const body = [
     `Implement this Azure DevOps work item in the project's configured repository.`,
     `Work item id: ${input.workItemId}.`,
-    buildCloudDevelopmentKickoffSection(development),
+    buildCloudDevelopmentKickoffSection(development, { skillInlined: Boolean(skillBundle) }),
     targetBranch && !input.apexOpensPullRequest
       ? `Create branch \`${branchName}\` from \`${targetBranch}\`. Open the pull request into \`${targetBranch}\` and no other branch.`
       : targetBranch
@@ -718,8 +727,43 @@ export async function buildCloudAgentPrompt(input: {
     `Do not change Azure DevOps work item state, due date, or due date reason.`,
     `Do not move this work item or its backlog items to In Pull Request.`,
     files,
+    skillBundle ? buildSkillBundleSection(skillBundle) : '',
   ].filter((part) => part.trim()).join('\n\n');
-  return prefixDevelopmentSkillInvocation(body, development);
+  // The skill text is in the prompt, so a `/skill-name` invocation would look for a file the clone may not have.
+  return skillBundle ? body : prefixDevelopmentSkillInvocation(body, development);
+}
+
+/**
+ * Reads the chosen skill from the skill repository for the prompt.
+ * `required` is true when a person or the project picked this skill: if it cannot be read,
+ * the launch stops with the reason instead of starting an agent that cannot find it.
+ * An unconfigured default may be absent, so a failed read there returns null.
+ */
+async function loadSkillBundleForLaunch(input: {
+  project: string;
+  skillPath: string;
+  skillConfig: ProjectSkillConfig | null;
+  required: boolean;
+}): Promise<CloudAgentSkillBundle | null> {
+  try {
+    return await loadCloudAgentSkillBundle({
+      project: input.project,
+      skillPath: input.skillPath,
+      skillConfig: input.skillConfig,
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (!input.required) {
+      console.warn('[cloud-agent] default skill not loaded', reason);
+      return null;
+    }
+    const config = input.skillConfig;
+    throw new CloudAgentLaunchError(
+      `The skill ${input.skillPath} could not be read from ${config?.skillRepo ?? 'the skill repository'}`
+      + `${config?.skillBranch ? ` (${config.skillBranch})` : ''}: ${reason}. `
+      + 'Choose another skill, or add this one to that branch.',
+    );
+  }
 }
 
 export async function attachCloudAgentEligibility(
@@ -1115,7 +1159,7 @@ export async function startGuidedCloudAgentRun(
   const branchName = prior?.branchName?.trim()
     || guidedSiteIssueBranchName({ sessionId, task: taskText, bugWorkItemId: bug.bugWorkItemId });
   const skillName = skillNameFromPath(selection.skillPath);
-  const prompt = buildGuidedCloudAgentPrompt({
+  const guidedPrompt = buildGuidedCloudAgentPrompt({
     title: job.title,
     skillPath: selection.skillPath,
     skillName,
@@ -1134,6 +1178,18 @@ export async function startGuidedCloudAgentRun(
       })
       : null,
   });
+  const selectedSkillPath = selection.skillPath;
+  const skillBundle = await loadSkillBundleForLaunch({
+    project: input.project,
+    skillPath: selectedSkillPath,
+    skillConfig,
+    required: input.availableSkills.some(
+      (skill) => normalizeRepoRelativePath(skill.path) === normalizeRepoRelativePath(selectedSkillPath),
+    ),
+  });
+  const prompt = skillBundle
+    ? `${guidedPrompt}\n\n${buildSkillBundleSection(skillBundle)}`
+    : guidedPrompt;
   const nowIso = new Date().toISOString();
   // A new report that opens a Bug is owned by this process until the Bug is stored.
   // The queue pump claims queued runs with a null owner, including during the

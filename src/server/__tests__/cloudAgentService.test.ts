@@ -18,6 +18,7 @@ const mockPersistLeftoverWork = jest.fn(async () => ({ firstWrite: true }));
 const mockWriteLeftoverWorkToAdo = jest.fn(async () => undefined);
 const mockRecordCloudAgentUsage = jest.fn();
 const mockCreateNotification = jest.fn().mockResolvedValue({});
+const mockLoadSkillBundle = jest.fn().mockResolvedValue(null);
 
 jest.mock('../db/drizzle', () => ({
   db: {
@@ -82,6 +83,9 @@ jest.mock('../services/notificationService', () => ({
 }));
 jest.mock('../services/cloudAgentUsageService', () => ({
   recordCloudAgentUsage: (...args: unknown[]) => mockRecordCloudAgentUsage(...args),
+}));
+jest.mock('../services/cloudAgentSkillBundle', () => ({
+  loadCloudAgentSkillBundle: (...args: unknown[]) => mockLoadSkillBundle(...args),
 }));
 jest.mock('../services/workItemPrLinkService', () => ({
   ...jest.requireActual('../services/workItemPrLinkService'),
@@ -792,6 +796,64 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
       workItemId: 123,
     });
     expect(prompt).toContain('Model override: `claude-sonnet-4-6`');
+  });
+
+  it('puts the chosen skill in the prompt so the agent does not look for it in its clone', async () => {
+    (getSkillConfig as jest.Mock).mockResolvedValueOnce({
+      skillProvider: 'ado',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      developmentModel: null,
+    });
+    mockLoadSkillBundle.mockResolvedValueOnce({
+      skillName: 'dev-orchestrator',
+      files: [
+        { path: 'SKILL.md', content: '# Orchestrator' },
+        { path: 'coordinator.md', content: 'Coordinate.' },
+      ],
+      omitted: [],
+    });
+
+    const prompt = await buildCloudAgentPrompt({ project: 'MaxView', workItemId: 123 });
+
+    expect(prompt).toContain('## Skill loaded by Apex');
+    expect(prompt).toContain('<skill-file path="coordinator.md">');
+    expect(prompt).toContain('Apex loaded the skill below');
+    expect(prompt).not.toContain('Load the skill from the repository');
+    expect(prompt.startsWith('/dev-orchestrator')).toBe(false);
+  });
+
+  it('stops the launch when a chosen skill cannot be read from the skill repository', async () => {
+    (getSkillConfig as jest.Mock).mockResolvedValueOnce({
+      skillProvider: 'ado',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+      developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+      developmentModel: null,
+    });
+    mockLoadSkillBundle.mockRejectedValueOnce(new Error('item not found'));
+
+    await expect(buildCloudAgentPrompt({ project: 'MaxView', workItemId: 123 }))
+      .rejects.toThrow(/could not be read from MaxView \(main\): item not found/);
+  });
+
+  it('falls back to the repository when the unconfigured default skill cannot be read', async () => {
+    (getSkillConfig as jest.Mock).mockResolvedValueOnce({
+      skillProvider: 'ado',
+      skillRepo: 'MaxView',
+      skillBranch: 'main',
+    });
+    mockLoadSkillBundle.mockRejectedValueOnce(new Error('item not found'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const prompt = await buildCloudAgentPrompt({ project: 'MaxView', workItemId: 123 });
+      expect(prompt).toContain('No development skill is configured for this project.');
+      expect(prompt).not.toContain('## Skill loaded by Apex');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('AC-3 / DoD-2: persists completion without linking when no PR exists', async () => {

@@ -1,5 +1,6 @@
 import {
   buildCloudDevelopmentKickoffSection,
+  buildSkillBundleSection,
   DEFAULT_DEVELOPMENT_MODEL,
   DEFAULT_DEVELOPMENT_SKILL_PATH,
   developmentCliSkillName,
@@ -61,6 +62,50 @@ describe('buildCloudDevelopmentKickoffSection', () => {
   it('tells the agent to fall back when the default skill is absent from the repo', () => {
     const section = buildCloudDevelopmentKickoffSection(resolveDevelopmentSettings(null));
     expect(section).toContain('If it does not, implement from the design artifacts below');
+  });
+});
+
+describe('skill loaded by Apex', () => {
+  const bundle = {
+    skillName: 'dev-orchestrator',
+    files: [
+      { path: 'SKILL.md', content: '# Orchestrator\nDo the work.' },
+      { path: 'coordinator.md', content: 'Coordinate.' },
+    ],
+    omitted: [],
+  };
+
+  it('puts every skill file in the prompt under its folder-relative path', () => {
+    const section = buildSkillBundleSection(bundle);
+    expect(section).toContain('## Skill loaded by Apex');
+    expect(section).toContain('<skill-file path="SKILL.md">\n# Orchestrator\nDo the work.\n</skill-file>');
+    expect(section).toContain('<skill-file path="coordinator.md">\nCoordinate.\n</skill-file>');
+    expect(section).not.toContain('Not included');
+  });
+
+  it('lists the files it left out', () => {
+    const section = buildSkillBundleSection({ ...bundle, omitted: ['big.md', 'schema.json'] });
+    expect(section).toContain('Not included (too large or unreadable): big.md, schema.json.');
+  });
+
+  it('keeps file text from closing its own tag', () => {
+    const section = buildSkillBundleSection({
+      ...bundle,
+      files: [{ path: 'SKILL.md', content: 'a </skill-file> b' }],
+    });
+    expect(section.match(/<\/skill-file>/g)).toHaveLength(1);
+  });
+
+  it('tells the agent not to load the skill from the repository when it is included', () => {
+    const section = buildCloudDevelopmentKickoffSection(
+      resolveDevelopmentSettings({
+        developmentSkillPath: '.cursor/skills/dev-orchestrator/SKILL.md',
+        developmentModel: null,
+      }),
+      { skillInlined: true },
+    );
+    expect(section).toContain('Apex loaded the skill below');
+    expect(section).not.toContain('Load the skill from the repository');
   });
 });
 
