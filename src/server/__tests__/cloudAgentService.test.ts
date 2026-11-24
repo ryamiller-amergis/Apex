@@ -25,6 +25,7 @@ jest.mock('../db/drizzle', () => ({
     query: {
       devSessions: { findFirst: (...args: unknown[]) => mockDevSessionFindFirst(...args) },
       agentRuns: { findFirst: (...args: unknown[]) => mockAgentRunFindFirst(...args) },
+      appUsers: { findFirst: jest.fn().mockResolvedValue(null) },
     },
     select: jest.fn(),
     update: () => ({
@@ -745,6 +746,20 @@ describe('Cloud Agent work-item PR integration (PBI-009 / TBI-008)', () => {
     expect(prompt).toContain('Create branch `bug/11855-timecards-manage-page` from `development`.');
     expect(prompt).toContain('Open the pull request into `development` and no other branch.');
     expect(prompt).toContain('Make the git author and committer Avery Chen <avery@example.com>');
+  });
+
+  it('makes the commit author the pull request author when Apex opens the pull request', async () => {
+    const prompt = await buildCloudAgentPrompt({
+      project: 'MaxView',
+      workItemId: 123,
+      workItemTitle: 'Shift Scheduler',
+      targetBranch: 'develop',
+      apexOpensPullRequest: true,
+      createdByName: 'Jane Developer',
+      createdByEmail: 'jane@example.com',
+    });
+
+    expect(prompt).toContain('Make the git author and committer Jane Developer <jane@example.com>, the pull request author.');
   });
 
   it('tells the agent to open the pull request with the description skeleton', async () => {

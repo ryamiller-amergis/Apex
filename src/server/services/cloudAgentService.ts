@@ -6,7 +6,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/drizzle';
-import { agentRuns, devSessions } from '../db/schema';
+import { agentRuns, appUsers, devSessions } from '../db/schema';
 import { MY_WORK_CLOUD_AGENT_FLAG } from '../../shared/types/featureFlags';
 import {
   buildGuidedCloudAgentPrompt,
@@ -720,7 +720,7 @@ export async function buildCloudAgentPrompt(input: {
         ? `Create branch \`${branchName}\` from \`${targetBranch}\`.`
         : `Work on branch \`${branchName}\` and no other branch.`,
     creator
-      ? `Make the git author and committer ${creator}${input.createdByEmail?.trim() ? ` <${input.createdByEmail.trim()}>` : ''}, the person who created this work item.`
+      ? `Make the git author and committer ${creator}${input.createdByEmail?.trim() ? ` <${input.createdByEmail.trim()}>` : ''}, ${input.apexOpensPullRequest ? 'the pull request author' : 'the person who created this work item'}.`
       : '',
     descriptionInstructions
       ?? `Open a pull request titled \`${pullRequestTitle}\`. Write ${buildWorkItemReferenceText(input.workItemId)} in the description. Add the pull request label \`${CLOUD_AGENT_PULL_REQUEST_LABEL}\`.`,
@@ -1652,6 +1652,13 @@ async function persistQueuedRun(
     ? undefined
     : (input.pullRequestAuthorId ?? input.userId);
   const myWorkOpensPullRequest = Boolean(pullRequestAuthorId) && !input.pullRequestAuthorId;
+  // Azure DevOps commits use the pull request author's identity, so the commit and the pull request name the same person.
+  const pullRequestAuthor = pullRequestAuthorId
+    ? await db.query.appUsers.findFirst({
+        where: eq(appUsers.oid, pullRequestAuthorId),
+        columns: { displayName: true, email: true },
+      })
+    : undefined;
   const basePrompt = await deps.buildPrompt({
     project: input.project,
     workItemId: input.workItemId,
@@ -1662,8 +1669,8 @@ async function persistQueuedRun(
       ? { skillPath: launchSettings.skillPath, model: launchSettings.model }
       : {}),
     targetBranch,
-    createdByName: facts.name,
-    createdByEmail: facts.email,
+    createdByName: pullRequestAuthorId ? (pullRequestAuthor?.displayName ?? null) : facts.name,
+    createdByEmail: pullRequestAuthorId ? (pullRequestAuthor?.email ?? null) : facts.email,
     ...(pullRequestAuthorId ? { apexOpensPullRequest: true } : {}),
   });
   const configuredDevelopment = resolveDevelopmentSettings(skillConfig);
