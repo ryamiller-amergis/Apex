@@ -145,6 +145,11 @@ describe('reading the model reply', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('unreadable reply'));
   });
 
+  it('says the reply was empty when the model sent no text', async () => {
+    invokeBedrockText.mockResolvedValue('  ');
+    await expect(generateProjectSkillDraft(base)).rejects.toThrow('empty reply');
+  });
+
   it('names the missing part when the reply is half there', async () => {
     invokeBedrockText.mockResolvedValue('<description>d</description><instructions>  </instructions>');
     await expect(generateProjectSkillDraft(base)).rejects.toThrow('no instructions');

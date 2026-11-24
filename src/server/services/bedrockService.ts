@@ -2203,7 +2203,7 @@ async function invokeModel(
     },
   );
   const body = JSON.parse(new TextDecoder().decode(response.body)) as {
-    content: Array<{ type: string; text: string }>;
+    content?: Array<{ type: string; text?: string }>;
     stop_reason?: string;
     usage?: {
       input_tokens?: number;
@@ -2213,7 +2213,19 @@ async function invokeModel(
     };
   };
 
-  const text = body.content[0]?.text ?? '';
+  // Newer Claude models can put a thinking block before the answer, so the first block is not
+  // always text.
+  const blocks = body.content ?? [];
+  const text = blocks
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('');
+  if (!text) {
+    console.warn(
+      `[bedrockService] Reply had no text (model=${modelId}, stop_reason=${body.stop_reason ?? 'none'}, ` +
+      `blocks=${blocks.map((block) => block.type).join(',') || 'none'}).`,
+    );
+  }
 
   // Record exact usage (fire-and-forget)
   if (usageCtx) {

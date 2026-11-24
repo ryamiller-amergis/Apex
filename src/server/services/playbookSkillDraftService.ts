@@ -147,6 +147,9 @@ export async function generateProjectSkillDraft(input: {
     }
     throw error;
   }
+  if (!reply.trim()) {
+    throw new ProjectSkillDraftError('The AI sent back an empty reply. Try again, or pick a different model.');
+  }
   const parsed = parseDraftReply(reply);
   if (!parsed) {
     console.warn(
