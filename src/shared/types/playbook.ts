@@ -360,6 +360,16 @@ export interface PlaybookStepActivity {
     lastError: string | null;
   } | null;
   entries: PlaybookStepActivityEntry[];
+  /** The chat between the assignee and the agent. Set only for an interactive Agent task. */
+  conversation?: PlaybookStepChatMessage[];
+}
+
+/** One message in an interactive Agent task's chat, oldest first. */
+export interface PlaybookStepChatMessage {
+  id: string;
+  role: 'user' | 'agent';
+  text: string;
+  at: string;
 }
 
 export interface PlaybookStepBlobRef {

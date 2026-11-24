@@ -4,15 +4,23 @@
  */
 
 const OUTCOME_LINE = /^[ \t>*_`]*OUTCOME[ \t*_`]*:[ \t]*(.+?)[ \t]*$/gim;
+const OUTCOME_INSTRUCTION =
+  'When you finish, end your reply with one line in exactly this form, choosing the result that fits best:';
 
 export function promptWithOutcomes(prompt: string, outcomes: readonly string[] | undefined): string {
   if (!outcomes?.length) return prompt;
   return [
     prompt,
     '',
-    'When you finish, end your reply with one line in exactly this form, choosing the result that fits best:',
+    OUTCOME_INSTRUCTION,
     `OUTCOME: <one of: ${outcomes.join(' | ')}>`,
   ].join('\n');
+}
+
+/** The prompt as the person wrote it, without the outcome instructions `promptWithOutcomes` added. */
+export function stripOutcomeInstructions(prompt: string): string {
+  const at = prompt.lastIndexOf(`\n\n${OUTCOME_INSTRUCTION}\n`);
+  return at >= 0 ? prompt.slice(0, at) : prompt;
 }
 
 /** The agent's chosen outcome, normalised to the lowercase form outcomes are stored in. */

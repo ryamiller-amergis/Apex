@@ -1,14 +1,19 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { PlaybookLiveStepPanel } from '../PlaybookLiveStepPanel';
-import type { PlaybookStepRun } from '../../../shared/types/playbook';
+import type { PlaybookStepChatMessage, PlaybookStepRun } from '../../../shared/types/playbook';
 
 const idle = { mutate: jest.fn(), isPending: false, isError: false, error: null };
+const mockTurn = { mutate: jest.fn(), isPending: false, isError: false, error: null };
+let mockConversation: PlaybookStepChatMessage[] = [];
 
 jest.mock('../../hooks/usePlaybookRuns', () => ({
   useInteractiveAgentDecision: () => idle,
-  useInteractiveAgentTurn: () => idle,
+  useInteractiveAgentTurn: () => mockTurn,
   usePlaybookGateDecision: () => idle,
-  usePlaybookStepActivity: () => ({ data: { entries: [], agentRun: null }, isError: false }),
+  usePlaybookStepActivity: () => ({
+    data: { entries: [], agentRun: null, conversation: mockConversation },
+    isError: false,
+  }),
   usePlaybookStepOutput: () => ({ data: null, isPending: false, isError: false }),
 }));
 
@@ -57,6 +62,48 @@ function renderPanel(step: PlaybookStepRun, expanded = true) {
 }
 
 describe('PlaybookLiveStepPanel', () => {
+  beforeEach(() => {
+    mockConversation = [];
+    mockTurn.mutate.mockReset();
+  });
+
+  it('shows the chat as messages from each side', () => {
+    mockConversation = [
+      { id: 'u1', role: 'user', text: 'Draft the notes for 1.12.', at: '2026-11-24T19:21:00.000Z' },
+      { id: 'a1', role: 'agent', text: 'Here is the draft.', at: '2026-11-24T19:22:00.000Z' },
+    ];
+    renderPanel(agentStep({ outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 1 } }));
+    const thread = screen.getByTestId('playbook-interactive-conversation');
+    const items = thread.querySelectorAll('li[data-role]');
+    expect(Array.from(items).map((item) => item.getAttribute('data-role'))).toEqual(['user', 'agent']);
+    expect(thread).toHaveTextContent('Draft the notes for 1.12.');
+    expect(thread).toHaveTextContent('Here is the draft.');
+  });
+
+  it('shows an empty chat, then a working reply while a turn runs', () => {
+    const { unmount } = render(
+      <PlaybookLiveStepPanel project="Apex" runId="run-1" step={agentStep()} expanded
+        onExpandedChange={jest.fn()} onClose={jest.fn()} />,
+    );
+    expect(screen.getByTestId('playbook-interactive-conversation')).toHaveTextContent('No messages yet');
+    unmount();
+
+    mockConversation = [{ id: 'u1', role: 'user', text: 'Go', at: '2026-11-24T19:21:00.000Z' }];
+    renderPanel(agentStep({ agentRunId: 'agent-run-1' }));
+    expect(screen.getByLabelText('The agent is working')).toBeInTheDocument();
+    expect(screen.getByTestId('playbook-interactive-send')).toBeDisabled();
+  });
+
+  it('sends with Ctrl+Enter', () => {
+    renderPanel(agentStep());
+    const box = screen.getByTestId('playbook-interactive-message');
+    fireEvent.change(box, { target: { value: 'Draft the notes.' } });
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+    expect(mockTurn.mutate).toHaveBeenCalledWith('Draft the notes.', expect.anything());
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(mockTurn.mutate).toHaveBeenCalledTimes(1);
+  });
+
   it('says it is waiting for a message instead of showing a queued agent', () => {
     renderPanel(agentStep());
     expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('Waiting for your message');

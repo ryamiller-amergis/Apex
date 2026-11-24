@@ -10,9 +10,12 @@ import type { ChatMessage } from '../../shared/types/chat';
 import type {
   PlaybookStepActivity,
   PlaybookStepActivityEntry,
+  PlaybookStepChatMessage,
 } from '../../shared/types/playbook';
+import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
 import { getThread } from './chatAgentService';
 import { getRun } from './playbookRunProjectionService';
+import { extractOutcome, stripOutcomeInstructions } from './playbookSteps/agentOutcome';
 
 const MAX_ENTRIES = 300;
 /** Streamed replies arrive a few words per event, so read far more rows than entries shown. */
@@ -138,6 +141,33 @@ export function threadActivityEntries(messages: readonly ChatMessage[]): Playboo
   return entries.slice(-MAX_ENTRIES);
 }
 
+/**
+ * The assignee's messages and the agent's replies, as the chat shows them. The outcome
+ * instructions Apex adds to each prompt, and the OUTCOME line the agent ends with, are left out.
+ * Consecutive agent messages in one turn are joined into one reply.
+ */
+export function threadConversation(messages: readonly ChatMessage[]): PlaybookStepChatMessage[] {
+  const conversation: PlaybookStepChatMessage[] = [];
+  for (const message of messages) {
+    if (message.hidden) continue;
+    if (message.role === 'user') {
+      const text = stripOutcomeInstructions(message.text).trim();
+      if (text) conversation.push({ id: message.id, role: 'user', text, at: message.ts });
+      continue;
+    }
+    if (message.role !== 'agent' || message.toolName) continue;
+    const text = extractOutcome(message.text).text.trim();
+    if (!text) continue;
+    const previous = conversation[conversation.length - 1];
+    if (previous?.role === 'agent') {
+      previous.text = `${previous.text}\n\n${text}`;
+      continue;
+    }
+    conversation.push({ id: message.id, role: 'agent', text, at: message.ts });
+  }
+  return conversation.slice(-MAX_ENTRIES);
+}
+
 export function mergeActivityEntries(
   threadEntries: readonly PlaybookStepActivityEntry[],
   runEntries: readonly PlaybookStepActivityEntry[],
@@ -168,7 +198,19 @@ export async function getPlaybookStepActivity(input: {
     agentRun: null,
     entries: [],
   };
-  if (step.stepType !== 'cursor-agent' || !step.agentRunId) return activity;
+  if (step.stepType !== 'cursor-agent') return activity;
+
+  // An interactive Agent task keeps one thread across turns and clears agentRunId between them,
+  // so the thread is the record of the chat and of the log between turns.
+  const chatThreadId = isInteractiveTaskDraft(step.outputInline) ? step.outputInline.threadId : null;
+  const chatThread = chatThreadId ? await getThread(chatThreadId) : null;
+  if (chatThreadId) {
+    activity.conversation = threadConversation(chatThread?.messages ?? []);
+  }
+  if (!step.agentRunId) {
+    if (chatThread) activity.entries = threadActivityEntries(chatThread.messages);
+    return activity;
+  }
 
   const [agentRun] = await db.select({
     status: agentRuns.status,
@@ -191,7 +233,9 @@ export async function getPlaybookStepActivity(input: {
     progressAt: agentRun.progressAt ?? null,
     lastError: agentRun.lastError ?? null,
   };
-  const thread = await getThread(agentRun.threadId);
+  const thread = chatThread && agentRun.threadId === chatThreadId
+    ? chatThread
+    : await getThread(agentRun.threadId);
   const fromThread = threadActivityEntries(thread?.messages ?? []);
   // Newest first, then restored to run order. Reading the oldest rows instead would
   // freeze the log on the first MAX_ENTRIES events of a long run.

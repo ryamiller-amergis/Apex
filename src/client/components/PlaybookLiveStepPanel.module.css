@@ -81,15 +81,112 @@
   padding-bottom: 0.9rem;
 }
 
-.content[data-split='true'] .decisionReport {
+.content[data-split='true'] .chatThread {
   flex: 1;
-  min-height: 8rem;
+  min-height: 10rem;
   max-height: none;
 }
 
+.content[data-split='true'] .decisionReport {
+  max-height: 14rem;
+}
+
 .content[data-split='true'] .decision textarea {
-  min-height: 140px;
+  min-height: 110px;
   resize: vertical;
+}
+
+.chatThread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 14rem;
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  list-style: none;
+  overflow-y: auto;
+}
+
+.chatEmpty {
+  margin: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.chatMessage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 88%;
+}
+
+.chatMessage[data-role='user'] {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chatMessage[data-role='agent'] {
+  align-self: flex-start;
+}
+
+.chatAuthor {
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.chatBubble {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatMessage[data-role='user'] .chatBubble {
+  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-primary));
+}
+
+.chatMessage[data-role='agent'] .chatBubble {
+  white-space: normal;
+}
+
+.chatMessage[data-role='agent'] .chatBubble > :first-child {
+  margin-top: 0;
+}
+
+.chatMessage[data-role='agent'] .chatBubble > :last-child {
+  margin-bottom: 0;
+}
+
+.chatWorking {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+}
+
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.proposalLabel {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--text-secondary);
 }
 
 .decision {

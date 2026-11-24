@@ -3,7 +3,7 @@
  * step is, how long it has run, and what it is doing now or why it failed. Expanded, it shows the
  * step's log and its input and output.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Clock, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
 import type {
   PlaybookStepRun,
@@ -16,6 +16,7 @@ import {
   usePlaybookStepActivity,
 } from '../hooks/usePlaybookRuns';
 import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import {
@@ -88,6 +89,20 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const lastTurnError = typeof draft?.lastTurnError === 'string' ? draft.lastTurnError : '';
   const rejectedRevisions = typeof draft?.rejectedRevisions === 'number' ? draft.rejectedRevisions : 0;
   const chatClosed = rejectedRevisions >= 1;
+  const conversation = chatting ? activity.data?.conversation ?? [] : [];
+  const agentWorking = Boolean(step.agentRunId) || interactiveTurn.isPending;
+  const threadRef = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [conversation.length, agentWorking]);
+
+  const canSend = !chatClosed && !interactiveTurn.isPending && Boolean(chatMessage.trim()) && !step.agentRunId;
+  const send = () => {
+    if (!canSend) return;
+    interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
+  };
 
   useEffect(() => {
     if (!expanded) return undefined;
@@ -188,9 +203,38 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                   <p className={styles.decisionLead}>
                     Chat with the agent, then approve a result that passes its checks.
                   </p>
-                  {proposalText ? <pre className={styles.decisionReport}>{proposalText}</pre> : (
-                    <p className={styles.decisionMissing}>No proposal yet. Send a message to start.</p>
-                  )}
+                  <ol
+                    ref={threadRef}
+                    className={styles.chatThread}
+                    aria-label="Conversation"
+                    {...{ 'data-testid': 'playbook-interactive-conversation' }}
+                  >
+                    {conversation.length === 0 && !agentWorking ? (
+                      <li className={styles.chatEmpty}>No messages yet. Say what you need and the agent starts.</li>
+                    ) : null}
+                    {conversation.map((entry) => (
+                      <li key={entry.id} className={styles.chatMessage} data-role={entry.role}>
+                        <span className={styles.chatAuthor}>{entry.role === 'user' ? 'Assignee' : 'Agent'}</span>
+                        <div className={styles.chatBubble}>
+                          {entry.role === 'agent' ? <MarkdownWithMermaid content={entry.text} /> : entry.text}
+                        </div>
+                      </li>
+                    ))}
+                    {agentWorking ? (
+                      <li className={styles.chatMessage} data-role="agent" aria-label="The agent is working">
+                        <span className={styles.chatAuthor}>Agent</span>
+                        <div className={`${styles.chatBubble} ${styles.chatWorking}`}>
+                          <Loader2 size={13} aria-hidden className={styles.spin} /> Working on a reply…
+                        </div>
+                      </li>
+                    ) : null}
+                  </ol>
+                  {proposalText ? (
+                    <div className={styles.proposal}>
+                      <span className={styles.proposalLabel}>Proposal to approve</span>
+                      <pre className={styles.decisionReport}>{proposalText}</pre>
+                    </div>
+                  ) : null}
                   {proposalReason ? <p className={styles.decisionError} role="alert">{proposalReason}</p> : null}
                   {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
                   {chatClosed ? (
@@ -201,6 +245,13 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                       <textarea
                         value={chatMessage}
                         onChange={(event) => setChatMessage(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                            event.preventDefault();
+                            send();
+                          }
+                        }}
+                        placeholder="Ctrl+Enter to send"
                         aria-label="Message to the agent"
                         {...{ 'data-testid': 'playbook-interactive-message' }}
                       />
@@ -211,10 +262,8 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                       <button
                         type="button"
                         className={styles.approve}
-                        disabled={interactiveTurn.isPending || !chatMessage.trim() || Boolean(step.agentRunId)}
-                        onClick={() => {
-                          interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
-                        }}
+                        disabled={!canSend}
+                        onClick={send}
                         {...{ 'data-testid': 'playbook-interactive-send' }}
                       >
                         {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
