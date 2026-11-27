@@ -346,7 +346,8 @@ export const StepLog: React.FC<{
   }, [activity.data?.entries, cloud.events, isAgent, isCloud, step, suspension]);
 
   // An interactive Agent task parks between turns with no agent run. Nothing is queued: the next
-  // turn starts when the assignee sends a message.
+  // turn starts when the assignee sends a message. The first turn starts from the step prompt, so
+  // this shows briefly at the start, or stays if that turn could not start.
   const awaitingMessage = isAgent
     && step.status === 'suspended'
     && !step.agentRunId
@@ -354,6 +355,9 @@ export const StepLog: React.FC<{
   const turnCount = awaitingMessage
     ? Number((step.outputInline as { turnCount?: unknown }).turnCount) || 0
     : 0;
+  const startFailed = awaitingMessage
+    && typeof (step.outputInline as { lastTurnError?: unknown }).lastTurnError === 'string'
+    && Boolean((step.outputInline as { lastTurnError: string }).lastTurnError);
   const agentRun = activity.data?.agentRun;
   const cloudLabel = isCloud && live
     ? (cloudAgentActivityLabel(cloud.events) ?? (cloud.error ? null : 'Connecting to the agent…'))
@@ -379,9 +383,11 @@ export const StepLog: React.FC<{
       {awaitingMessage ? (
         <p className={styles.awaiting} {...{ 'data-testid': 'playbook-step-awaiting-message' }}>
           <MessageSquare size={13} aria-hidden />
-          {turnCount === 0
-            ? 'Waiting for your message. The agent starts when you send one.'
-            : 'The agent finished its turn. Send another message, or approve the proposal.'}
+          {turnCount > 0
+            ? 'The agent finished its turn. Send another message, or approve the proposal.'
+            : startFailed
+              ? 'The agent did not start. Send a message to begin.'
+              : 'Starting the agent from the step prompt…'}
         </p>
       ) : isAgent || isCloud ? (
         <ol className={styles.phases} aria-label="Progress">

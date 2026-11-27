@@ -202,6 +202,32 @@ export async function startAgentTaskChat(input: {
     .set({ outputInline: draftRecord(draft), updatedAt: nowIso() })
     .where(eq(playbookStepRuns.id, context.stepRunId));
 
+  // The step's own prompt is the assignee's opening message, so the agent starts without waiting.
+  // A turn that cannot start must not fail the step: the assignee sees why and sends a message.
+  try {
+    await launchInteractiveTurn({
+      stepRunId: context.stepRunId,
+      stepId: context.stepId,
+      project: context.project,
+      threadId: thread.id,
+      userId: assigneeUserId,
+      message: input.prompt,
+      config,
+    });
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : String(error)).replace(/[.\s]+$/, '');
+    console.warn(`[playbook] first interactive turn could not start for ${context.stepRunId}: ${reason}`);
+    await db.update(playbookStepRuns)
+      .set({
+        outputInline: draftRecord({
+          ...draft,
+          lastTurnError: `The agent could not start from the step's prompt: ${reason}. Send a message to try again.`,
+        }),
+        updatedAt: nowIso(),
+      })
+      .where(eq(playbookStepRuns.id, context.stepRunId));
+  }
+
   const node = context.graph?.nodes.find((candidate) => candidate.id === context.stepId);
   await createNotification(
     assigneeUserId,
@@ -281,7 +307,32 @@ export async function sendInteractiveTurn(input: {
     throw new AgentTaskChatError('A turn is already running.');
   }
 
-  const config = parseStepInput<CursorAgentStepConfig>(STEP_TYPE, (row.inputInline ?? {}) as Record<string, unknown>);
+  await launchInteractiveTurn({
+    stepRunId: row.id,
+    stepId: row.stepId,
+    project: row.project,
+    threadId: row.resumeToken || draft.threadId,
+    userId: input.userId,
+    message,
+    config: parseStepInput<CursorAgentStepConfig>(STEP_TYPE, (row.inputInline ?? {}) as Record<string, unknown>),
+  });
+}
+
+/**
+ * Starts one agent turn on the step's thread and records it on the step. The caller has checked
+ * that the step is parked, open to messages, and has no turn running.
+ */
+async function launchInteractiveTurn(input: {
+  stepRunId: string;
+  stepId: string;
+  project: string;
+  threadId: string;
+  userId: string;
+  message: string;
+  config: CursorAgentStepConfig;
+}): Promise<void> {
+  const { config, message, threadId } = input;
+  const row = { id: input.stepRunId, stepId: input.stepId, project: input.project };
   const skillPath = playbookSkillPath(config.skillPath);
   const skillConfig = await getSkillConfig(row.project);
   const versionId = projectSkillVersionIdFromPath(skillPath);
@@ -304,7 +355,6 @@ export async function sendInteractiveTurn(input: {
   });
   const prompt = promptWithOutcomes(message, config.outcomes);
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
-  const threadId = row.resumeToken || draft.threadId;
 
   let agentRunId: string | null = null;
   if (await isV2TransportEnabled(input.userId, row.project)) {

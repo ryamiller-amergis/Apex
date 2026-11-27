@@ -8,10 +8,11 @@ const enqueue = jest.fn();
 jest.mock('../services/agentRunLifecycleService', () => ({ enqueue: (...a: unknown[]) => enqueue(...a) }));
 
 const createThread = jest.fn();
+const prepareBackgroundWorkflowTurn = jest.fn();
 jest.mock('../services/chatAgentService', () => ({
   createThread: (...a: unknown[]) => createThread(...a),
   getThread: jest.fn().mockResolvedValue(null),
-  prepareBackgroundWorkflowTurn: jest.fn(),
+  prepareBackgroundWorkflowTurn: (...a: unknown[]) => prepareBackgroundWorkflowTurn(...a),
 }));
 
 const isFeatureEnabled = jest.fn();
@@ -19,7 +20,10 @@ jest.mock('../services/featureFlagService', () => ({
   isFeatureEnabled: (...a: unknown[]) => isFeatureEnabled(...a),
 }));
 
-jest.mock('../services/backgroundWorkflowRouter', () => ({ routeBackgroundWorkflow: jest.fn() }));
+const routeBackgroundWorkflow = jest.fn();
+jest.mock('../services/backgroundWorkflowRouter', () => ({
+  routeBackgroundWorkflow: (...a: unknown[]) => routeBackgroundWorkflow(...a),
+}));
 
 const getSkillConfig = jest.fn();
 jest.mock('../services/projectSettingsService', () => ({
@@ -192,6 +196,36 @@ describe('any other Skill runs the agent on its own, as before', () => {
     expect(createThread.mock.calls[0][0]).toBe('initiator-oid');
     expect(suspendStepRun).toHaveBeenCalledWith(expect.objectContaining({ agentRunId: 'agent-run-1' }));
     expect(outcome).toMatchObject({ kind: 'suspended', agentRunId: 'agent-run-1' });
+  });
+
+  it.each([
+    ['a Skill that declares autonomous', AUTONOMOUS_PATH],
+    ['no Skill', undefined],
+  ])('gives the agent the step prompt, its outcome line and the work item for %s', async (_label, skillPath) => {
+    workItemPromptSection.mockResolvedValue('## Azure DevOps work item 7\n\n**Title:** Clock-in fails');
+
+    await executeCursorAgentStep(
+      context({ ...(skillPath ? { skillPath } : {}), prompt: 'Summarise the failure.', outcomes: ['fixed', 'blocked'] }),
+    );
+
+    const expected =
+      'Summarise the failure.\n\nWhen you finish, end your reply with one line in exactly this form, choosing the result that fits best:\nOUTCOME: <one of: fixed | blocked>\n\n## Azure DevOps work item 7\n\n**Title:** Clock-in fails';
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(expected);
+    expect(createThread.mock.calls[0][1].freeformContext).toBe(expected);
+  });
+
+  it('hands the same prompt to the V2 worker', async () => {
+    isFeatureEnabled.mockResolvedValue(true);
+    prepareBackgroundWorkflowTurn.mockResolvedValue({ prompt: 'prepared' });
+    routeBackgroundWorkflow.mockImplementation(async (input: { prepareWorker: () => Promise<unknown> }) => {
+      await input.prepareWorker();
+      return { route: 'worker', runId: 'v2-run-1' };
+    });
+
+    await executeCursorAgentStep(context({ skillPath: AUTONOMOUS_PATH, prompt: 'Summarise the failure.' }));
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(prepareBackgroundWorkflowTurn).toHaveBeenCalledWith('thread-1', 'Summarise the failure.');
   });
 
   it('runs on its own when no Skill is named (the default is non-interactive)', async () => {

@@ -203,15 +203,77 @@ describe('opening the chat', () => {
     expect(suspendStepRun).toHaveBeenCalledWith(
       expect.objectContaining({ stepRunId: 'step-run-1', resumeToken: 'thread-1' }),
     );
-    // No agent run yet: the first turn starts when the assignee writes.
+    // The step parks on the thread. The first turn is its own run, started right after.
     expect(suspendStepRun.mock.calls[0][0].agentRunId).toBeUndefined();
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledTimes(1);
     expect(outcome.kind).toBe('suspended');
     expect(createNotification).toHaveBeenCalledWith(
       ASSIGNEE,
       expect.objectContaining({ title: 'Chat needed: Review the incident', link: '/playbooks/runs/run-1' }),
       { dedupeKey: 'playbook-interactive-open:step-run-1' },
     );
+  });
+
+  it('starts the agent on the step prompt without waiting for a message', async () => {
+    await start({ assigneeUserId: ASSIGNEE }, 'Create release notes following the skill and ask me through it.');
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const input = enqueue.mock.calls[0][0];
+    expect(input).toMatchObject({ threadId: 'thread-1', projectId: PROJECT, lane: 'background' });
+    expect(input.snapshot).toMatchObject({
+      prompt: 'Create release notes following the skill and ask me through it.',
+      workflowClass: 'playbook-step',
+      skillPath: SKILL_PATH,
+      threadId: 'thread-1',
+    });
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ agentRunId: 'turn-run-1' }));
+  });
+
+  it('keeps the work item section the caller added in the opening message', async () => {
+    await start({ assigneeUserId: ASSIGNEE }, 'Write the notes.\n\n## Azure DevOps work item\n\nEpic 42');
+
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(
+      'Write the notes.\n\n## Azure DevOps work item\n\nEpic 42',
+    );
+  });
+
+  it('asks for an OUTCOME line on the first turn when the step declares outcomes', async () => {
+    await start({ assigneeUserId: ASSIGNEE, outcomes: ['approved', 'rework'] }, 'Write the notes.');
+
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(
+      'Write the notes.\n\nWhen you finish, end your reply with one line in exactly this form, choosing the result that fits best:\nOUTCOME: <one of: approved | rework>',
+    );
+  });
+
+  it('starts the first turn on the V2 worker when the transport flag is on', async () => {
+    isFeatureEnabled.mockResolvedValue(true);
+    routeBackgroundWorkflow.mockResolvedValue({ route: 'worker', runId: 'v2-run-1' });
+
+    await start({ assigneeUserId: ASSIGNEE });
+
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(routeBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ workflowClass: 'playbook-step', threadId: 'thread-1' }),
+    );
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ agentRunId: 'v2-run-1' }));
+  });
+
+  it('keeps the step open and says why when the first turn cannot start', async () => {
+    enqueue.mockRejectedValue(new Error('Admission is full.'));
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(start({ assigneeUserId: ASSIGNEE })).resolves.toMatchObject({ kind: 'suspended' });
+
+    expect(failStepRun).not.toHaveBeenCalled();
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputInline: expect.objectContaining({
+          threadId: 'thread-1',
+          lastTurnError: "The agent could not start from the step's prompt: Admission is full. Send a message to try again.",
+        }),
+      }),
+    );
+    warn.mockRestore();
   });
 
   it('writes an empty draft with the outcomes the step declares', async () => {

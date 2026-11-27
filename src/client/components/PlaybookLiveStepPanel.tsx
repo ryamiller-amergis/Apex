@@ -210,7 +210,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                     {...{ 'data-testid': 'playbook-interactive-conversation' }}
                   >
                     {conversation.length === 0 && !agentWorking ? (
-                      <li className={styles.chatEmpty}>No messages yet. Say what you need and the agent starts.</li>
+                      <li className={styles.chatEmpty}>No messages yet. The agent starts from the step prompt.</li>
                     ) : null}
                     {conversation.map((entry) => (
                       <li key={entry.id} className={styles.chatMessage} data-role={entry.role}>

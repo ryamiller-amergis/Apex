@@ -104,12 +104,25 @@ describe('PlaybookLiveStepPanel', () => {
     expect(mockTurn.mutate).toHaveBeenCalledTimes(1);
   });
 
-  it('says it is waiting for a message instead of showing a queued agent', () => {
+  it('says the agent is starting instead of showing a queued agent', () => {
     renderPanel(agentStep());
-    expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('Waiting for your message');
+    expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('Starting the agent');
     expect(screen.queryByLabelText('Progress')).not.toBeInTheDocument();
     expect(screen.queryByText('Waiting for the first output…')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Still running')).not.toBeInTheDocument();
+  });
+
+  it('asks for a message when the agent could not start from the step prompt', () => {
+    renderPanel(agentStep({
+      outputInline: {
+        threadId: 'thread-1',
+        assigneeUserId: 'user-1',
+        turnCount: 0,
+        lastTurnError: 'The agent could not start from the step\'s prompt: Admission is full.',
+      },
+    }));
+    expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('did not start');
+    expect(screen.getByRole('alert')).toHaveTextContent('Admission is full');
   });
 
   it('says the turn finished once the agent has replied', () => {
