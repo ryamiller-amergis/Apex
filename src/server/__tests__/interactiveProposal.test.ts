@@ -74,10 +74,17 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
   });
 
   it('records a valid proposal without completing the step', () => {
-    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'A document.' } });
+    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'A document.\nREADY FOR APPROVAL' } });
     expect(next.turnCount).toBe(1);
     expect(next.proposalOk).toBe(true);
     expect(next.proposalText).toBe('A document.');
+  });
+
+  it('keeps a reply with no ready marker as a turn, with nothing to approve', () => {
+    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'Which release do you mean?' } });
+    expect(next.turnCount).toBe(1);
+    expect(next.proposalOk).toBe(false);
+    expect(next.proposalText).toBeNull();
   });
 
   it('allows only approve or cancel after one rejected revision', () => {

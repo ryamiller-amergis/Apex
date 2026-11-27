@@ -130,6 +130,7 @@ import {
   startAgentTaskChat,
   warnInteractiveExpiring,
 } from '../services/playbookSteps/agentTaskChat';
+import { PROPOSAL_MARKER, promptWithProposalInstruction } from '../services/playbookSteps/proposalMarker';
 import type { InteractiveStepDraft } from '../services/playbookSteps/interactiveProposal';
 import type { PlaybookStepExecutionContext } from '../services/playbookSteps/stepRuns';
 
@@ -236,7 +237,7 @@ describe('opening the chat', () => {
     const input = enqueue.mock.calls[0][0];
     expect(input).toMatchObject({ threadId: 'thread-1', projectId: PROJECT, lane: 'background' });
     expect(input.snapshot).toMatchObject({
-      prompt: 'Create release notes following the skill and ask me through it.',
+      prompt: promptWithProposalInstruction('Create release notes following the skill and ask me through it.'),
       workflowClass: 'playbook-step',
       skillPath: SKILL_PATH,
       threadId: 'thread-1',
@@ -248,7 +249,7 @@ describe('opening the chat', () => {
     await start({ assigneeUserId: ASSIGNEE }, 'Write the notes.\n\n## Azure DevOps work item\n\nEpic 42');
 
     expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(
-      'Write the notes.\n\n## Azure DevOps work item\n\nEpic 42',
+      promptWithProposalInstruction('Write the notes.\n\n## Azure DevOps work item\n\nEpic 42'),
     );
   });
 
@@ -256,8 +257,16 @@ describe('opening the chat', () => {
     await start({ assigneeUserId: ASSIGNEE, outcomes: ['approved', 'rework'] }, 'Write the notes.');
 
     expect(enqueue.mock.calls[0][0].snapshot.prompt).toBe(
-      'Write the notes.\n\nWhen you finish, end your reply with one line in exactly this form, choosing the result that fits best:\nOUTCOME: <one of: approved | rework>',
+      `${promptWithProposalInstruction('Write the notes.')}\n\nWhen you finish, end your reply with one line in exactly this form, choosing the result that fits best:\nOUTCOME: <one of: approved | rework>`,
     );
+  });
+
+  it('tells the agent that only a reply ending with the marker line is a proposal', async () => {
+    await start({ assigneeUserId: ASSIGNEE });
+
+    const prompt = enqueue.mock.calls[0][0].snapshot.prompt as string;
+    expect(prompt).toContain('ask your question and stop');
+    expect(prompt.trimEnd().endsWith(PROPOSAL_MARKER)).toBe(true);
   });
 
   it('starts the first turn on the V2 worker when the transport flag is on', async () => {
@@ -447,7 +456,7 @@ describe('a chat turn', () => {
     const input = enqueue.mock.calls[0][0];
     expect(input).toMatchObject({ threadId: 'thread-1', projectId: PROJECT, lane: 'background' });
     expect(input.snapshot).toMatchObject({
-      prompt: 'Check the logs',
+      prompt: promptWithProposalInstruction('Check the logs'),
       workflowClass: 'playbook-step',
       skillPath: SKILL_PATH,
       threadId: 'thread-1',
@@ -514,7 +523,8 @@ describe('a chat turn', () => {
     const prompt = prepareBackgroundWorkflowTurn.mock.calls[0][1] as string;
     expect(prompt).toContain('**Assignee:** Draft the notes.');
     expect(prompt).toContain('**Agent:** Which release?');
-    expect(prompt.endsWith('The 1.12 release.')).toBe(true);
+    expect(prompt).toContain('## New message from the assignee\n\nThe 1.12 release.');
+    expect(prompt.trimEnd().endsWith(PROPOSAL_MARKER)).toBe(true);
   });
 
   it('does not write the assignee message itself on the in-process path', async () => {
@@ -624,7 +634,7 @@ describe('a finished turn', () => {
 
   it('keeps the reply as the proposal and frees the step for the next message', async () => {
     selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
-    getThread.mockResolvedValue(agentReply('The cause is a stale cache.'));
+    getThread.mockResolvedValue(agentReply('The cause is a stale cache.\nREADY FOR APPROVAL'));
 
     const recorded = await recordInteractiveTurnFinished({
       stepRunId: 'step-run-1',
@@ -649,7 +659,7 @@ describe('a finished turn', () => {
 
   it('takes the reply of a V2 turn from its artifact and copies it into the thread', async () => {
     selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
-    readV2ScorecardFiles.mockResolvedValue({ reply: 'The cause is a stale cache.' });
+    readV2ScorecardFiles.mockResolvedValue({ reply: 'The cause is a stale cache.\nREADY FOR APPROVAL' });
 
     await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'v2-run-1', threadId: 'thread-1' });
 
@@ -657,7 +667,11 @@ describe('a finished turn', () => {
     expect(getThread).not.toHaveBeenCalled();
     expect(insertMessage).toHaveBeenCalledWith(
       'thread-1',
-      expect.objectContaining({ id: stableMessageId('v2-run-1:reply'), role: 'agent', text: 'The cause is a stale cache.' }),
+      expect.objectContaining({
+        id: stableMessageId('v2-run-1:reply'),
+        role: 'agent',
+        text: 'The cause is a stale cache.\nREADY FOR APPROVAL',
+      }),
     );
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -673,7 +687,7 @@ describe('a finished turn', () => {
   it('falls back to the thread when the artifact cannot be read', async () => {
     selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
     readV2ScorecardFiles.mockRejectedValue(new Error('blob unavailable'));
-    getThread.mockResolvedValue(agentReply('From the thread.'));
+    getThread.mockResolvedValue(agentReply('From the thread.\n**READY FOR APPROVAL**'));
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'v2-run-1' });
@@ -682,6 +696,39 @@ describe('a finished turn', () => {
       expect.objectContaining({
         outputInline: expect.objectContaining({ proposalText: 'From the thread.', proposalOk: true }),
       }),
+    );
+  });
+
+  it('treats a reply without the marker as the agent asking, with nothing to approve', async () => {
+    selectRows.mockResolvedValue([
+      { outputInline: blankDraft({ turnCount: 1, proposalText: 'old', proposalOk: true }), resumeToken: 'thread-1' },
+    ]);
+    getThread.mockResolvedValue(agentReply('a) the 1.12 release, or b) the 1.13 release?'));
+
+    await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'turn-run-1' });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentRunId: null,
+        outputInline: expect.objectContaining({
+          turnCount: 2,
+          proposalText: null,
+          proposalOk: false,
+          proposalReason: null,
+          lastTurnError: null,
+        }),
+      }),
+    );
+  });
+
+  it('does not count the marker words in the middle of a reply', async () => {
+    selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
+    getThread.mockResolvedValue(agentReply('Say READY FOR APPROVAL when you want a result.\nWhich release?'));
+
+    await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'turn-run-1' });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ outputInline: expect.objectContaining({ proposalText: null, proposalOk: false }) }),
     );
   });
 
@@ -704,7 +751,7 @@ describe('a finished turn', () => {
 
   it('reads the outcome the agent picked and marks a proposal that is not on the list', async () => {
     selectRows.mockResolvedValue([{ outputInline: blankDraft({ outcomes: ['approved', 'rework'] }), resumeToken: 'thread-1' }]);
-    getThread.mockResolvedValue(agentReply('Looks fine.\nOUTCOME: Maybe'));
+    getThread.mockResolvedValue(agentReply('Looks fine.\nREADY FOR APPROVAL\nOUTCOME: Maybe'));
 
     await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'turn-run-1' });
 
@@ -722,7 +769,7 @@ describe('a finished turn', () => {
 
   it('accepts a proposal that picks a declared outcome', async () => {
     selectRows.mockResolvedValue([{ outputInline: blankDraft({ outcomes: ['approved', 'rework'] }), resumeToken: 'thread-1' }]);
-    getThread.mockResolvedValue(agentReply('Ship it.\nOUTCOME: approved'));
+    getThread.mockResolvedValue(agentReply('Ship it.\nREADY FOR APPROVAL\nOUTCOME: approved'));
 
     await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'turn-run-1' });
 

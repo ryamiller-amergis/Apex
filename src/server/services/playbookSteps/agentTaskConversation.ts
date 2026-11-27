@@ -7,6 +7,7 @@
 import type { ChatMessage } from '../../../shared/types/chat';
 import type { PlaybookStepChatMessage } from '../../../shared/types/playbook';
 import { extractOutcome, stripOutcomeInstructions } from './agentOutcome';
+import { splitProposalMarker, stripProposalInstruction } from './proposalMarker';
 
 const MAX_CONVERSATION_MESSAGES = 300;
 /** Earlier turns beyond this size are dropped, oldest first, from the prompt of a new turn. */
@@ -22,12 +23,12 @@ export function threadConversation(messages: readonly ChatMessage[]): PlaybookSt
   for (const message of messages) {
     if (message.hidden) continue;
     if (message.role === 'user') {
-      const text = stripOutcomeInstructions(message.text).trim();
+      const text = stripProposalInstruction(stripOutcomeInstructions(message.text)).trim();
       if (text) conversation.push({ id: message.id, role: 'user', text, at: message.ts });
       continue;
     }
     if (message.role !== 'agent' || message.toolName) continue;
-    const text = extractOutcome(message.text).text.trim();
+    const text = splitProposalMarker(extractOutcome(message.text).text).text.trim();
     if (!text) continue;
     const previous = conversation[conversation.length - 1];
     if (previous?.role === 'agent') {

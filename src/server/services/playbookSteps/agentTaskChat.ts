@@ -37,6 +37,7 @@ import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
 import { insertMessage } from '../chatThreadRepository';
 import { extractOutcome, promptWithOutcomes } from './agentOutcome';
+import { promptWithProposalInstruction } from './proposalMarker';
 import { promptWithHistory } from './agentTaskConversation';
 import { readV2ScorecardFiles } from './v2StepArtifacts';
 import { parseStepInput, parseStepOutput } from './descriptorValidation';
@@ -416,7 +417,7 @@ async function launchInteractiveTurn(input: {
       ? { bundle: { skillVersionId: versionId, companions: stored.companions } }
       : {}),
   });
-  const prompt = promptWithOutcomes(message, config.outcomes);
+  const prompt = promptWithOutcomes(promptWithProposalInstruction(message), config.outcomes);
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
 
   let agentRunId: string | null = null;

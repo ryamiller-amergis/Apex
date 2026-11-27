@@ -100,6 +100,8 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const chatClosed = rejectedRevisions >= 1;
   const conversation = chatting ? activity.data?.conversation ?? [] : [];
   const agentWorking = Boolean(step.agentRunId) || interactiveTurn.isPending;
+  // A finished turn with no proposal is the agent asking or talking, not a result to approve.
+  const asking = chatting && turnCount > 0 && !proposalText && !lastTurnError && !agentWorking && !chatClosed;
   const threadRef = useRef<HTMLOListElement>(null);
 
   useEffect(() => {
@@ -273,6 +275,11 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                       <span className={styles.proposalLabel}>Proposal to approve</span>
                       <pre className={styles.decisionReport}>{proposalText}</pre>
                     </div>
+                  ) : null}
+                  {asking ? (
+                    <p className={styles.decisionMissing} role="status" {...{ 'data-testid': 'playbook-interactive-asking' }}>
+                      Agent is asking. Reply in the box below. Approve turns on when the agent sends a result marked ready for approval.
+                    </p>
                   ) : null}
                   {proposalText && proposalReason && turnCount > 0 ? (
                     <p className={styles.decisionError} role="alert">{proposalReason}</p>

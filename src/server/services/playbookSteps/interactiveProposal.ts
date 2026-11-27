@@ -1,7 +1,8 @@
 /**
  * Rules for the proposal of an Agent task whose Skill is interactive (FEAT-003, BR-006).
  *
- * A proposal is the agent's latest answer on the step's thread. The assignee may approve it only
+ * A proposal is the agent's latest answer on the step's thread, and only when that answer ends with
+ * the `READY FOR APPROVAL` line (see proposalMarker.ts). The assignee may approve it only
  * when it passes the loose result check and the skill's output kind check. Both are pure functions
  * here so the approval route and the tests read the same rule.
  *
@@ -11,6 +12,7 @@
  * A skill with no kind keeps only the loose check.
  */
 import { isInteractiveTaskDraft } from '../../../shared/utils/playbookAgentTask';
+import { splitProposalMarker } from './proposalMarker';
 
 /** What a suspended interactive Agent task remembers between turns. */
 export interface InteractiveStepDraft {
@@ -40,7 +42,20 @@ export function draftAfterTurn(input: {
   if (input.failedReason) {
     return { ...input.draft, lastTurnError: input.failedReason };
   }
-  const text = input.reply?.text ?? '';
+  // Only a reply that ends with the marker line is a proposal. Any other reply is the agent asking
+  // or talking, so there is nothing to approve until a later turn carries the marker.
+  const { marked, text } = splitProposalMarker(input.reply?.text ?? '');
+  if (!marked) {
+    return {
+      ...input.draft,
+      turnCount: input.draft.turnCount + 1,
+      proposalText: null,
+      proposalOutcome: null,
+      proposalOk: false,
+      proposalReason: null,
+      lastTurnError: null,
+    };
+  }
   const outcome = input.reply?.outcome;
   const check = checkInteractiveProposal({
     text,

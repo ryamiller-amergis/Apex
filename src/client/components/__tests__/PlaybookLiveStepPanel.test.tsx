@@ -202,6 +202,52 @@ describe('PlaybookLiveStepPanel', () => {
     expect(screen.getByText('The outcome must be one of: approved, rework.')).toBeInTheDocument();
   });
 
+  it('says the agent is asking when a turn ended without a proposal, and keeps Approve off', () => {
+    renderPanel(agentStep({
+      outputInline: {
+        threadId: 'thread-1',
+        assigneeUserId: 'user-1',
+        turnCount: 1,
+        proposalText: null,
+        proposalOk: false,
+      },
+    }));
+    expect(screen.getByTestId('playbook-interactive-asking')).toHaveTextContent('Agent is asking');
+    expect(screen.queryByText('Proposal to approve')).not.toBeInTheDocument();
+    expect(screen.getByTestId('playbook-interactive-approve')).toBeDisabled();
+    expect(screen.getByTestId('playbook-interactive-reject')).toBeDisabled();
+    expect(screen.getByTestId('playbook-interactive-message')).toBeInTheDocument();
+  });
+
+  it('shows a proposal to approve, not the asking note, once the agent marks a result ready', () => {
+    renderPanel(agentStep({
+      outputInline: {
+        threadId: 'thread-1',
+        assigneeUserId: 'user-1',
+        turnCount: 2,
+        proposalText: 'The final notes.',
+        proposalOk: true,
+      },
+    }));
+    expect(screen.queryByTestId('playbook-interactive-asking')).not.toBeInTheDocument();
+    expect(screen.getByText('Proposal to approve')).toBeInTheDocument();
+    expect(screen.getByTestId('playbook-interactive-approve')).toBeEnabled();
+  });
+
+  it('does not say the agent is asking before its first turn, or while it works', () => {
+    const { unmount } = render(
+      <PlaybookLiveStepPanel project="Apex" runId="run-1" expanded onExpandedChange={jest.fn()} onClose={jest.fn()}
+        step={agentStep()} />,
+    );
+    expect(screen.queryByTestId('playbook-interactive-asking')).not.toBeInTheDocument();
+    unmount();
+    renderPanel(agentStep({
+      agentRunId: 'agent-run-1',
+      outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 1 },
+    }));
+    expect(screen.queryByTestId('playbook-interactive-asking')).not.toBeInTheDocument();
+  });
+
   it('goes full size when a running step turns into a chat', () => {
     const running = agentStep({ status: 'running', outputInline: null });
     const props = {
