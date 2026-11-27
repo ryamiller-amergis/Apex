@@ -74,11 +74,6 @@ export function draftAfterTurn(input: {
   };
 }
 
-/** Rejected revisions before the assignee can only approve or cancel. */
-export const INTERACTIVE_REJECTED_REVISION_LIMIT = 1;
-
-export type InteractiveProposalMode = 'chat' | 'approve-or-cancel';
-
 export type InteractiveProposalCheck = { ok: true } | { ok: false; reason: string };
 
 const JSON_KIND_OUTPUT = new Set(['scorecard@1', 'decision@1']);
@@ -87,19 +82,6 @@ const JSON_KIND_OUTPUT = new Set(['scorecard@1', 'decision@1']);
 function lastJsonBlock(text: string): string | null {
   const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
   return blocks.length > 0 ? blocks[blocks.length - 1][1] : null;
-}
-
-/**
- * What the assignee may do next.
- *
- * After a rejected revision the chat closes: the assignee can only approve the proposal or cancel
- * the run. Turns are not capped; the step deadline ends an abandoned chat.
- */
-export function interactiveProposalMode(input: {
-  rejectedRevisions: number;
-}): InteractiveProposalMode {
-  if (input.rejectedRevisions >= INTERACTIVE_REJECTED_REVISION_LIMIT) return 'approve-or-cancel';
-  return 'chat';
 }
 
 /**

@@ -1576,6 +1576,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const userId = getUserId(req);
     const decision = (req.body ?? {}).decision;
+    const feedback = (req.body ?? {}).feedback;
     if (!userId) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
@@ -1584,12 +1585,17 @@ router.post(
       res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
       return;
     }
+    if (feedback !== undefined && typeof feedback !== 'string') {
+      res.status(400).json({ error: 'feedback must be text' });
+      return;
+    }
     try {
       const result = await decideInteractiveProposal({
         runId: req.params.runId,
         stepRunId: req.params.stepRunId,
         userId,
         decision,
+        ...(typeof feedback === 'string' ? { feedback } : {}),
       });
       if (result.outcome === 'recorded' && result.stepId && decision === 'approved') {
         await advanceRun(req.params.runId, result.stepId);

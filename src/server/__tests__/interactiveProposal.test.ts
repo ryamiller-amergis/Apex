@@ -1,7 +1,6 @@
 import {
   checkInteractiveProposal,
   draftAfterTurn,
-  interactiveProposalMode,
   type InteractiveStepDraft,
 } from '../services/playbookSteps/interactiveProposal';
 
@@ -63,10 +62,6 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
     expect(checkInteractiveProposal({ text: 'Done.', kind: null, outcomes, outcome: 'merge' }).ok).toBe(false);
   });
 
-  it('keeps chatting until a revision is rejected', () => {
-    expect(interactiveProposalMode({ rejectedRevisions: 0 })).toBe('chat');
-  });
-
   it('keeps a failed turn off the turn count and stores the reason', () => {
     const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: null, failedReason: 'denied' });
     expect(next.turnCount).toBe(0);
@@ -87,7 +82,9 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
     expect(next.proposalText).toBeNull();
   });
 
-  it('allows only approve or cancel after one rejected revision', () => {
-    expect(interactiveProposalMode({ rejectedRevisions: 1 })).toBe('approve-or-cancel');
+  it('a rejected proposal can be answered with more turns: a later marked reply is a new proposal', () => {
+    const rejected = { ...EMPTY_DRAFT, rejectedRevisions: 1 };
+    const next = draftAfterTurn({ draft: rejected, reply: { text: 'Revised.\nREADY FOR APPROVAL' } });
+    expect(next).toMatchObject({ rejectedRevisions: 1, proposalText: 'Revised.', proposalOk: true });
   });
 });

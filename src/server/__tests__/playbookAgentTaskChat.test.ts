@@ -569,12 +569,12 @@ describe('a chat turn', () => {
     ).rejects.toThrow(/already running/);
   });
 
-  it('refuses a message after a revision was rejected: approve or cancel only', async () => {
+  it('still takes a message after a revision was rejected', async () => {
     selectRows.mockResolvedValue([openRow(blankDraft({ rejectedRevisions: 1 }))]);
 
-    await expect(
-      sendInteractiveTurn({ runId: 'run-1', stepRunId: 'step-run-1', userId: ASSIGNEE, message: 'hi' }),
-    ).rejects.toThrow(/Approve the proposal or cancel the run/);
+    await sendInteractiveTurn({ runId: 'run-1', stepRunId: 'step-run-1', userId: ASSIGNEE, message: 'hi' });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a message on a step that is not waiting', async () => {
@@ -834,8 +834,8 @@ describe('a finished turn', () => {
 });
 
 describe('the assignee decides', () => {
-  const decide = (decision: 'approved' | 'rejected', userId = ASSIGNEE) =>
-    decideInteractiveProposal({ runId: 'run-1', stepRunId: 'step-run-1', userId, decision });
+  const decide = (decision: 'approved' | 'rejected', userId = ASSIGNEE, feedback?: string) =>
+    decideInteractiveProposal({ runId: 'run-1', stepRunId: 'step-run-1', userId, decision, feedback });
 
   it('resumes the step with the approved text, who approved, and the outcome', async () => {
     selectRows.mockResolvedValue([
@@ -895,19 +895,52 @@ describe('the assignee decides', () => {
     await expect(decide('approved')).resolves.toMatchObject({ outcome: 'recorded' });
   });
 
-  it('counts a rejection and keeps the step parked', async () => {
-    selectRows.mockResolvedValue([openRow(blankDraft({ proposalText: 'Draft one' }))]);
+  it('drops the proposal, sends the feedback as the next turn, and keeps the step parked', async () => {
+    selectRows.mockResolvedValue([openRow(blankDraft({ proposalText: 'Draft one', proposalOk: true }))]);
 
-    await expect(decide('rejected')).resolves.toEqual({ outcome: 'recorded', stepId: 'review' });
+    await expect(decide('rejected', ASSIGNEE, ' Use the 1.13 release. ')).resolves.toEqual({
+      outcome: 'recorded',
+      stepId: 'review',
+    });
 
     expect(updateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ outputInline: expect.objectContaining({ rejectedRevisions: 1 }) }),
+      expect.objectContaining({
+        outputInline: expect.objectContaining({
+          rejectedRevisions: 1,
+          proposalText: null,
+          proposalOk: false,
+        }),
+      }),
     );
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0][0].snapshot.prompt).toContain('Use the 1.13 release.');
     expect(resumeStepRun).not.toHaveBeenCalled();
   });
 
-  it('still lets the assignee approve after the chat closed', async () => {
-    selectRows.mockResolvedValue([openRow(blankDraft({ rejectedRevisions: 1, proposalText: 'Second draft' }))]);
+  it('refuses a rejection with no feedback, and leaves the proposal alone', async () => {
+    selectRows.mockResolvedValue([openRow(blankDraft({ proposalText: 'Draft one', proposalOk: true }))]);
+
+    await expect(decide('rejected', ASSIGNEE, '   ')).rejects.toThrow(/Say what to change/);
+    expect(updateSet).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('puts the proposal back when the feedback turn cannot start', async () => {
+    selectRows.mockResolvedValue([openRow(blankDraft({ proposalText: 'Draft one', proposalOk: true }))]);
+    enqueue.mockRejectedValueOnce(new Error('Admission is full.'));
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(decide('rejected', ASSIGNEE, 'Try again')).rejects.toThrow(/Admission is full/);
+
+    expect(updateSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outputInline: expect.objectContaining({ proposalText: 'Draft one', proposalOk: true }),
+      }),
+    );
+  });
+
+  it('still lets the assignee approve a proposal after a rejection', async () => {
+    selectRows.mockResolvedValue([openRow(blankDraft({ rejectedRevisions: 1, proposalText: 'Second draft', proposalOk: true }))]);
 
     await expect(decide('approved')).resolves.toMatchObject({ outcome: 'recorded' });
   });

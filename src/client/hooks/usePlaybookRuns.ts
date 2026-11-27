@@ -129,13 +129,13 @@ export function useInteractiveAgentTurn(project: string, runId: string, stepRunI
 
 export function useInteractiveAgentDecision(project: string, runId: string, stepRunId: string) {
   const queryClient = useQueryClient();
-  return useMutation<unknown, PlaybookRunApiError, 'approved' | 'rejected'>({
-    mutationFn: (decision) => apiFetch(
+  return useMutation<unknown, PlaybookRunApiError, { decision: 'approved' | 'rejected'; feedback?: string }>({
+    mutationFn: ({ decision, feedback }) => apiFetch(
       `/api/playbooks/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepRunId)}/interactive-decision?project=${encodeURIComponent(project)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({ decision, ...(feedback !== undefined ? { feedback } : {}) }),
       },
     ),
     onSuccess: () => invalidateRunQueries(queryClient, project, runId),

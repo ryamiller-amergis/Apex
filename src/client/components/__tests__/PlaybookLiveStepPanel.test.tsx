@@ -4,10 +4,11 @@ import type { PlaybookStepChatMessage, PlaybookStepRun } from '../../../shared/t
 
 const idle = { mutate: jest.fn(), isPending: false, isError: false, error: null };
 const mockTurn = { mutate: jest.fn(), isPending: false, isError: false, error: null };
+const mockDecision = { mutate: jest.fn(), isPending: false, isError: false, error: null };
 let mockConversation: PlaybookStepChatMessage[] = [];
 
 jest.mock('../../hooks/usePlaybookRuns', () => ({
-  useInteractiveAgentDecision: () => idle,
+  useInteractiveAgentDecision: () => mockDecision,
   useInteractiveAgentTurn: () => mockTurn,
   usePlaybookGateDecision: () => idle,
   usePlaybookStepActivity: () => ({
@@ -69,6 +70,7 @@ describe('PlaybookLiveStepPanel', () => {
   beforeEach(() => {
     mockConversation = [];
     mockTurn.mutate.mockReset();
+    mockDecision.mutate.mockReset();
   });
 
   it('shows the chat as messages from each side', () => {
@@ -232,6 +234,40 @@ describe('PlaybookLiveStepPanel', () => {
     expect(screen.queryByTestId('playbook-interactive-asking')).not.toBeInTheDocument();
     expect(screen.getByText('Proposal to approve')).toBeInTheDocument();
     expect(screen.getByTestId('playbook-interactive-approve')).toBeEnabled();
+  });
+
+  it('rejects a proposal only with feedback typed, and sends that feedback to the agent', () => {
+    renderPanel(agentStep({
+      outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 2, proposalText: 'Draft.', proposalOk: true },
+    }));
+    const reject = screen.getByTestId('playbook-interactive-reject');
+    expect(reject).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('playbook-interactive-message'), { target: { value: 'Use the 1.13 release.' } });
+    expect(reject).toBeEnabled();
+    fireEvent.click(reject);
+
+    expect(mockDecision.mutate).toHaveBeenCalledWith(
+      { decision: 'rejected', feedback: 'Use the 1.13 release.' },
+      expect.anything(),
+    );
+  });
+
+  it('approves the proposal through the decision hook', () => {
+    renderPanel(agentStep({
+      outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 1, proposalText: 'Draft.', proposalOk: true },
+    }));
+    fireEvent.click(screen.getByTestId('playbook-interactive-approve'));
+    expect(mockDecision.mutate).toHaveBeenCalledWith({ decision: 'approved' });
+  });
+
+  it('keeps the message box open after a rejection, so the chat carries on', () => {
+    renderPanel(agentStep({
+      outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 2, rejectedRevisions: 1, proposalText: null, proposalOk: false },
+    }));
+    expect(screen.getByTestId('playbook-interactive-message')).toBeInTheDocument();
+    expect(screen.getByTestId('playbook-interactive-send')).toBeInTheDocument();
+    expect(screen.queryByText(/New messages are closed/)).not.toBeInTheDocument();
   });
 
   it('does not say the agent is asking before its first turn, or while it works', () => {

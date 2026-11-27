@@ -44,7 +44,6 @@ import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import {
   checkInteractiveProposal,
   draftAfterTurn,
-  interactiveProposalMode,
   isInteractiveStepDraft,
   type InteractiveStepDraft,
 } from './interactiveProposal';
@@ -363,10 +362,6 @@ export async function sendInteractiveTurn(input: {
       .where(and(eq(playbookRuns.id, row.runId), eq(playbookRuns.status, 'suspended')));
     throw new AgentTaskChatError('The assignee can no longer run Playbooks in this project.');
   }
-  const mode = interactiveProposalMode(draft);
-  if (mode === 'approve-or-cancel') {
-    throw new AgentTaskChatError('This step is closed to new messages. Approve the proposal or cancel the run.');
-  }
   if (row.agentRunId) {
     throw new AgentTaskChatError('A turn is already running.');
   }
@@ -518,11 +513,16 @@ export async function recordInteractiveTurnFinished(input: {
   return updated.length > 0;
 }
 
+/**
+ * The assignee approves the proposal (the step resumes) or rejects it. A rejection needs feedback:
+ * the proposal is dropped, the feedback goes to the agent as the next turn, and the chat stays open.
+ */
 export async function decideInteractiveProposal(input: {
   runId: string;
   stepRunId: string;
   userId: string;
   decision: 'approved' | 'rejected';
+  feedback?: string;
 }): Promise<{ outcome: 'recorded' | 'already-decided'; stepId?: string }> {
   const row = await loadOpenStep(input.stepRunId, input.runId);
   if (!row || row.stepType !== STEP_TYPE) {
@@ -541,13 +541,42 @@ export async function decideInteractiveProposal(input: {
     throw new AgentTaskChatError('The assignee can no longer run Playbooks in this project.');
   }
   if (input.decision === 'rejected') {
-    const next: InteractiveStepDraft = {
+    const feedback = (input.feedback ?? '').trim();
+    if (!feedback) throw new AgentTaskChatError('Say what to change before rejecting the proposal.');
+    if (row.agentRunId) throw new AgentTaskChatError('A turn is already running.');
+    const cleared: InteractiveStepDraft = {
       ...draft,
       rejectedRevisions: draft.rejectedRevisions + 1,
+      proposalText: null,
+      proposalOutcome: null,
+      proposalOk: false,
+      proposalReason: null,
     };
     await db.update(playbookStepRuns)
-      .set({ outputInline: draftRecord(next), updatedAt: nowIso() })
-      .where(and(eq(playbookStepRuns.id, row.id), eq(playbookStepRuns.status, 'suspended')));
+      .set({ outputInline: draftRecord(cleared), updatedAt: nowIso() })
+      .where(and(
+        eq(playbookStepRuns.id, row.id),
+        eq(playbookStepRuns.status, 'suspended'),
+        isNull(playbookStepRuns.agentRunId),
+      ));
+    try {
+      await sendInteractiveTurn({
+        runId: input.runId,
+        stepRunId: input.stepRunId,
+        userId: input.userId,
+        message: feedback,
+      });
+    } catch (error) {
+      // The feedback did not start a turn, so the proposal goes back for the assignee to decide.
+      await db.update(playbookStepRuns)
+        .set({ outputInline: draftRecord(draft), updatedAt: nowIso() })
+        .where(and(
+          eq(playbookStepRuns.id, row.id),
+          eq(playbookStepRuns.status, 'suspended'),
+          isNull(playbookStepRuns.agentRunId),
+        ));
+      throw error;
+    }
     return { outcome: 'recorded', stepId: row.stepId };
   }
   const check = checkInteractiveProposal({

@@ -95,13 +95,11 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const proposalOk = draft?.proposalOk === true;
   const proposalReason = typeof draft?.proposalReason === 'string' ? draft.proposalReason : '';
   const lastTurnError = typeof draft?.lastTurnError === 'string' ? draft.lastTurnError : '';
-  const rejectedRevisions = typeof draft?.rejectedRevisions === 'number' ? draft.rejectedRevisions : 0;
   const turnCount = typeof draft?.turnCount === 'number' ? draft.turnCount : 0;
-  const chatClosed = rejectedRevisions >= 1;
   const conversation = chatting ? activity.data?.conversation ?? [] : [];
   const agentWorking = Boolean(step.agentRunId) || interactiveTurn.isPending;
   // A finished turn with no proposal is the agent asking or talking, not a result to approve.
-  const asking = chatting && turnCount > 0 && !proposalText && !lastTurnError && !agentWorking && !chatClosed;
+  const asking = chatting && turnCount > 0 && !proposalText && !lastTurnError && !agentWorking;
   const threadRef = useRef<HTMLOListElement>(null);
 
   useEffect(() => {
@@ -109,10 +107,16 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [conversation.length, agentWorking]);
 
-  const canSend = !chatClosed && !interactiveTurn.isPending && Boolean(chatMessage.trim()) && !step.agentRunId;
+  const canSend = !interactiveTurn.isPending && Boolean(chatMessage.trim()) && !step.agentRunId;
   const send = () => {
     if (!canSend) return;
     interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
+  };
+  // Rejecting sends the typed text as the feedback for the next turn, so it needs text and a proposal.
+  const canReject = Boolean(proposalText) && Boolean(chatMessage.trim()) && !agentWorking && !interactiveDecision.isPending;
+  const reject = () => {
+    if (!canReject) return;
+    interactiveDecision.mutate({ decision: 'rejected', feedback: chatMessage }, { onSuccess: () => setChatMessage('') });
   };
 
   useEffect(() => {
@@ -285,10 +289,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                     <p className={styles.decisionError} role="alert">{proposalReason}</p>
                   ) : null}
                   {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
-                  {chatClosed ? (
-                    <p className={styles.decisionMissing}>New messages are closed. Approve the proposal or cancel the run.</p>
-                  ) : (
-                    <label className={styles.decisionLead}>
+                  <label className={styles.decisionLead}>
                       Message
                       <textarea
                         value={chatMessage}
@@ -299,29 +300,26 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                             send();
                           }
                         }}
-                        placeholder="Ctrl+Enter to send"
+                        placeholder={proposalText ? 'Ctrl+Enter to send. To reject, type what to change, then press Reject.' : 'Ctrl+Enter to send'}
                         aria-label="Message to the agent"
                         {...{ 'data-testid': 'playbook-interactive-message' }}
                       />
                     </label>
-                  )}
                   <div className={styles.decisionActions}>
-                    {chatClosed ? null : (
-                      <button
-                        type="button"
-                        className={styles.approve}
-                        disabled={!canSend}
-                        onClick={send}
-                        {...{ 'data-testid': 'playbook-interactive-send' }}
-                      >
-                        {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className={styles.approve}
+                      disabled={!canSend}
+                      onClick={send}
+                      {...{ 'data-testid': 'playbook-interactive-send' }}
+                    >
+                      {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
+                    </button>
                     <button
                       type="button"
                       className={styles.approve}
                       disabled={interactiveDecision.isPending || !proposalOk}
-                      onClick={() => interactiveDecision.mutate('approved')}
+                      onClick={() => interactiveDecision.mutate({ decision: 'approved' })}
                       {...{ 'data-testid': 'playbook-interactive-approve' }}
                     >
                       Approve
@@ -329,11 +327,12 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                     <button
                       type="button"
                       className={styles.reject}
-                      disabled={interactiveDecision.isPending || chatClosed || !proposalText}
-                      onClick={() => interactiveDecision.mutate('rejected')}
+                      disabled={!canReject}
+                      onClick={reject}
+                      title={proposalText && !chatMessage.trim() ? 'Type what to change first' : undefined}
                       {...{ 'data-testid': 'playbook-interactive-reject' }}
                     >
-                      Reject proposal
+                      Reject and send feedback
                     </button>
                   </div>
                   {interactiveTurn.isError ? (
