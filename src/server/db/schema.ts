@@ -3960,6 +3960,17 @@ export const projectPlaybookTools = pgTable('project_playbook_tools', {
   pk: primaryKey({ columns: [t.project, t.tool] }),
 }));
 
+/** Connector write operations a project lets its playbooks run. A platform admin sets them. */
+export const projectPlaybookConnectorWrites = pgTable('project_playbook_connector_writes', {
+  project: text('project').notNull(),
+  integration: text('integration').notNull(),
+  operation: text('operation').notNull(),
+  enabledBy: text('enabled_by').notNull(),
+  enabledAt: timestamp('enabled_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.project, t.integration, t.operation] }),
+}));
+
 export const projectPlaybookSkillsRelations = relations(projectPlaybookSkills, ({ many }) => ({
   versions: many(projectPlaybookSkillVersions),
 }));

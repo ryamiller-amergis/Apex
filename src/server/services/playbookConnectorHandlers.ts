@@ -7,7 +7,7 @@
  *
  * To add an integration: add it to the catalog, then add its operations here.
  */
-import { ADO_OPERATIONS } from './adoConnectorOperations';
+import { ADO_OPERATIONS, ADO_WRITE_OPERATIONS } from './adoConnectorOperations';
 
 export interface PlaybookConnectorCall {
   project: string;
@@ -20,7 +20,7 @@ export type PlaybookConnectorHandler = (call: PlaybookConnectorCall) => Promise<
 
 const HANDLERS: Readonly<Record<string, Readonly<Record<string, PlaybookConnectorHandler>>>> = {
   'azure-devops': Object.fromEntries(
-    Object.entries(ADO_OPERATIONS).map(([operation, run]) => [
+    Object.entries({ ...ADO_OPERATIONS, ...ADO_WRITE_OPERATIONS }).map(([operation, run]) => [
       operation,
       (call: PlaybookConnectorCall) => run({ project: call.project, parameters: call.parameters }),
     ]),

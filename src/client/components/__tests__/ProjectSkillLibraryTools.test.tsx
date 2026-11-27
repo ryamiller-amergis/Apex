@@ -8,7 +8,9 @@ jest.mock('../../hooks/useAppShell', () => ({
 
 const save = jest.fn();
 const setTools = jest.fn();
+const setWrites = jest.fn();
 let allowed: string[] = [];
+let allowedWrites: string[] = [];
 const SKILL_CONTENT = [
   '---',
   'name: incident-notes',
@@ -58,6 +60,20 @@ jest.mock('../../hooks/useProjectSkillLibrary', () => ({
     },
   }),
   useSetProjectSkillTools: () => ({ mutate: setTools, isPending: false, isError: false }),
+  useProjectConnectorWrites: () => ({
+    data: {
+      catalog: [
+        {
+          id: 'azure-devops/create-work-item',
+          integrationLabel: 'Azure DevOps',
+          label: 'Create a work item',
+          description: 'Create a work item in this project.',
+        },
+      ],
+      allowed: allowedWrites,
+    },
+  }),
+  useSetProjectConnectorWrites: () => ({ mutate: setWrites, isPending: false, isError: false }),
   useSkillDraftModels: () => ({ data: [] }),
   useGenerateProjectSkillDraft: () => ({ mutateAsync: jest.fn(), isPending: false }),
   extractSkillFileText: jest.fn(),
@@ -72,7 +88,9 @@ function openEditorOnExistingSkill() {
 beforeEach(() => {
   save.mockReset().mockResolvedValue(undefined);
   setTools.mockReset();
+  setWrites.mockReset();
   allowed = ['azure-cli'];
+  allowedWrites = [];
   superAdmin = false;
 });
 
@@ -160,5 +178,34 @@ describe('tools a project allows', () => {
     render(<ProjectSkillLibraryPage project="Apex" />);
     fireEvent.click(screen.getByTestId('skill-library-allow-azure-cli'));
     expect(setTools).toHaveBeenCalledWith(['azure-cli']);
+  });
+});
+
+describe('connector writes a project allows', () => {
+  it('shows the panel to a platform admin only', () => {
+    render(<ProjectSkillLibraryPage project="Apex" />);
+    expect(screen.queryByTestId('skill-library-connector-write-allow-list')).not.toBeInTheDocument();
+  });
+
+  it('names the integration and the action for a platform admin', () => {
+    superAdmin = true;
+    render(<ProjectSkillLibraryPage project="Apex" />);
+    const panel = screen.getByTestId('skill-library-connector-write-allow-list');
+    expect(panel).toHaveTextContent('Azure DevOps · Create a work item');
+  });
+
+  it('lets a platform admin allow a write', () => {
+    superAdmin = true;
+    render(<ProjectSkillLibraryPage project="Apex" />);
+    fireEvent.click(screen.getByTestId('skill-library-allow-write-azure-devops/create-work-item'));
+    expect(setWrites).toHaveBeenCalledWith(['azure-devops/create-work-item']);
+  });
+
+  it('lets a platform admin turn a write off', () => {
+    superAdmin = true;
+    allowedWrites = ['azure-devops/create-work-item'];
+    render(<ProjectSkillLibraryPage project="Apex" />);
+    fireEvent.click(screen.getByTestId('skill-library-allow-write-azure-devops/create-work-item'));
+    expect(setWrites).toHaveBeenCalledWith([]);
   });
 });

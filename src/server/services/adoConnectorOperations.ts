@@ -6,6 +6,7 @@
  * Nothing here knows about a branch naming scheme: the playbook supplies the refs and prefixes.
  */
 import { AzureDevOpsService } from './azureDevOps';
+import { markdownToAdoHtml } from './playbookSteps/adoDescriptionHtml';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_API_VERSION = '7.1';
@@ -57,16 +58,33 @@ export function buildProjectUrl(organizationUrl: string, project: string, relati
   return url;
 }
 
-/** One GET to Azure DevOps. Returns the parsed JSON body. */
-export async function adoGet(project: string, relativePath: string): Promise<unknown> {
+type AdoMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+const WRITE_METHODS: readonly AdoMethod[] = ['POST', 'PUT', 'PATCH', 'DELETE'];
+const WRITE_CONTENT_TYPES = ['application/json', 'application/json-patch+json'] as const;
+
+interface AdoRequestOptions {
+  method: AdoMethod;
+  body?: string;
+  contentType?: string;
+}
+
+/** One request to Azure DevOps. Returns the parsed JSON body, or null when there is none. */
+async function adoRequest(
+  project: string,
+  relativePath: string,
+  options: AdoRequestOptions,
+): Promise<unknown> {
   const { organizationUrl, pat } = credentials();
   const url = buildProjectUrl(organizationUrl, project, relativePath);
   const response = await fetch(url, {
-    method: 'GET',
+    method: options.method,
     headers: {
       Authorization: `Basic ${Buffer.from(`:${pat}`).toString('base64')}`,
       Accept: 'application/json',
+      ...(options.body !== undefined ? { 'Content-Type': options.contentType ?? 'application/json' } : {}),
     },
+    ...(options.body !== undefined ? { body: options.body } : {}),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text = await response.text();
@@ -75,6 +93,8 @@ export async function adoGet(project: string, relativePath: string): Promise<unk
       `Azure DevOps answered ${response.status} for ${url.pathname}: ${text.slice(0, 300).trim()}`,
     );
   }
+  // A write may return nothing, for example a delete.
+  if (response.status === 204 || text.trim() === '') return null;
   // An unusable token returns a sign-in page with status 200 or 203, not an error status.
   if (!(response.headers.get('content-type') ?? '').toLowerCase().includes('json')) {
     throw new AdoConnectorError(
@@ -86,6 +106,11 @@ export async function adoGet(project: string, relativePath: string): Promise<unk
   } catch {
     throw new AdoConnectorError(`Azure DevOps returned unreadable JSON for ${url.pathname}.`);
   }
+}
+
+/** One GET to Azure DevOps. Returns the parsed JSON body. */
+export function adoGet(project: string, relativePath: string): Promise<unknown> {
+  return adoRequest(project, relativePath, { method: 'GET' });
 }
 
 export interface AdoOperationContext {
@@ -278,5 +303,122 @@ export const ADO_OPERATIONS: Readonly<Record<string, AdoOperation>> = {
 
   'rest-get': async ({ project, parameters }) => {
     return json(await adoGet(project, required(parameters, 'path', 'Path')));
+  },
+};
+
+/** A field name such as System.State or Custom.Risk. It becomes part of a patch path. */
+const FIELD_NAME = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
+
+function parseFieldValues(text: string): Array<[string, unknown]> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new AdoConnectorError('Fields must be a JSON object, for example {"System.State": "Resolved"}.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AdoConnectorError('Fields must be a JSON object, for example {"System.State": "Resolved"}.');
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.length === 0) throw new AdoConnectorError('Fields has nothing to set.');
+  for (const [name] of entries) {
+    if (!FIELD_NAME.test(name)) {
+      throw new AdoConnectorError(`"${name}" is not a field name. Use the reference name, such as System.State.`);
+    }
+  }
+  return entries;
+}
+
+function writeMethod(value: string): AdoMethod {
+  const method = value.trim().toUpperCase();
+  if (!(WRITE_METHODS as readonly string[]).includes(method)) {
+    throw new AdoConnectorError('Method must be POST, PATCH, PUT, or DELETE. Use "Read anything" for a GET.');
+  }
+  return method as AdoMethod;
+}
+
+/**
+ * Operations that change Azure DevOps. The catalog marks each `write`, so the guard asks for an
+ * approval gate before them and the project must allow them (`playbookConnectorWriteAllowList`).
+ */
+export const ADO_WRITE_OPERATIONS: Readonly<Record<string, AdoOperation>> = {
+  'create-work-item': async ({ project, parameters }) => {
+    const type = required(parameters, 'workItemType', 'Work item type');
+    const title = required(parameters, 'title', 'Title');
+    const description = optional(parameters, 'description');
+    const html = description ? markdownToAdoHtml(description) : undefined;
+    // Description is the field a PBI, TBI, or Feature shows. A Bug form shows Repro Steps instead.
+    const created = await new AzureDevOpsService(project).createWorkItemForPrd({
+      type,
+      title,
+      description: html,
+      reproStepsHtml: type.toLowerCase() === 'bug' ? html : undefined,
+    });
+    return json({ id: created.id, url: created.url });
+  },
+
+  'update-work-item': async ({ project, parameters }) => {
+    const id = positiveInteger(required(parameters, 'workItemId', 'Work item'), 'Work item');
+    const patch = parseFieldValues(required(parameters, 'fields', 'Fields')).map(([name, value]) => ({
+      op: 'add',
+      path: `/fields/${name}`,
+      value,
+    }));
+    const updated = (await adoRequest(project, `_apis/wit/workitems/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+      contentType: 'application/json-patch+json',
+    })) as { id?: number; rev?: number } | null;
+    return json({ id: updated?.id ?? id, rev: updated?.rev });
+  },
+
+  'post-comment': async ({ project, parameters }) => {
+    const id = positiveInteger(required(parameters, 'workItemId', 'Work item'), 'Work item');
+    const comment = await new AzureDevOpsService(project).addWorkItemComment(
+      id,
+      required(parameters, 'text', 'Comment'),
+    );
+    return json({ commentId: comment.id, workItemId: id });
+  },
+
+  'create-pull-request': async ({ project, parameters }) => {
+    const workItem = optional(parameters, 'workItemId');
+    const draft = optional(parameters, 'draft').toLowerCase();
+    if (draft && draft !== 'true' && draft !== 'false') {
+      throw new AdoConnectorError('Draft must be true or false.');
+    }
+    const url = await new AzureDevOpsService(project).createPullRequest({
+      repo: required(parameters, 'repository', 'Repository'),
+      project,
+      sourceBranch: required(parameters, 'sourceBranch', 'Source branch'),
+      targetBranch: required(parameters, 'targetBranch', 'Target branch'),
+      title: required(parameters, 'title', 'Title'),
+      description: optional(parameters, 'description'),
+      ...(workItem ? { workItemId: positiveInteger(workItem, 'Linked work item') } : {}),
+      isDraft: draft === 'true',
+    });
+    return json({ url });
+  },
+
+  'rest-write': async ({ project, parameters }) => {
+    const method = writeMethod(required(parameters, 'method', 'Method'));
+    const path = required(parameters, 'path', 'Path');
+    const contentType = optional(parameters, 'contentType') || 'application/json';
+    if (!(WRITE_CONTENT_TYPES as readonly string[]).includes(contentType)) {
+      throw new AdoConnectorError(`Content type must be ${WRITE_CONTENT_TYPES.join(' or ')}.`);
+    }
+    const body = optional(parameters, 'body');
+    if (body) {
+      try {
+        JSON.parse(body);
+      } catch {
+        throw new AdoConnectorError('Body must be valid JSON.');
+      }
+    }
+    const response = await adoRequest(project, path, {
+      method,
+      ...(body ? { body, contentType } : {}),
+    });
+    return json(response ?? { status: 'ok' });
   },
 };

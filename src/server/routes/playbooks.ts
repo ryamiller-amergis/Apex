@@ -32,6 +32,12 @@ import {
 } from '../services/playbookGuardService';
 import { PlaybookMcpCapabilityError } from '../services/playbookMcpCapabilityService';
 import { PlaybookExecutionCapabilityError } from '../services/playbookExecutionCapabilityService';
+import {
+  PlaybookConnectorWriteError,
+  listAllowedConnectorWrites,
+  setAllowedConnectorWrites,
+} from '../services/playbookConnectorWriteAllowListService';
+import { playbookConnectorWriteOptions } from '../../shared/types/playbookConnectors';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
 import {
   CLOUD_AGENT_SETUP_REASON,
@@ -236,6 +242,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookBranchConditionError ||
     error instanceof PlaybookMcpCapabilityError ||
     error instanceof PlaybookExecutionCapabilityError ||
+    error instanceof PlaybookConnectorWriteError ||
     error instanceof UnknownPlaybookStepTypeError ||
     error instanceof PlaybookStepSchemaError ||
     error instanceof PlaybookStepTypeError
@@ -910,6 +917,50 @@ router.get(
       return;
     }
     res.json({ catalog: PLAYBOOK_SKILL_TOOLS, allowed: await listAllowedPlaybookTools(project) });
+  },
+);
+
+router.get(
+  '/connector-writes',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json({ catalog: playbookConnectorWriteOptions(), allowed: await listAllowedConnectorWrites(project) });
+  },
+);
+
+// Which connector writes a project's playbooks may run is a platform decision.
+router.put(
+  '/connector-writes',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const actorUserId = getUserId(req);
+    const operations = (req.body ?? {}).operations;
+    if (!project || !actorUserId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    if (!Array.isArray(operations) || operations.some((id) => typeof id !== 'string')) {
+      res.status(400).json({ error: 'operations must be a list of operation ids.' });
+      return;
+    }
+    try {
+      res.json({
+        catalog: playbookConnectorWriteOptions(),
+        allowed: await setAllowedConnectorWrites({ project, operations, actorUserId }),
+      });
+    } catch (error) {
+      if (error instanceof PlaybookConnectorWriteError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   },
 );
 

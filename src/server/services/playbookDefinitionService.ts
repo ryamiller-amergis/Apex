@@ -29,6 +29,7 @@ import {
 } from './playbookGuardService';
 import { cloudAgentPlaybookSetupGap } from './cloudAgentDeliverySettings';
 import { assertCursorAgentsUseReadOnlyMcp } from './playbookMcpCapabilityService';
+import { assertConnectorWritesAllowedForGraph } from './playbookConnectorWriteAllowListService';
 import { getStepTypeDescriptor } from './playbookSteps/registry';
 import { resolvePlaybookGraphAgentPolicies } from './playbookExecutionCapabilityService';
 import { assertAgentTasksFitTheirSkills } from './playbookAgentTaskMode';
@@ -594,6 +595,7 @@ export async function publishDraft(
       if (cloudNode && setupGap) throw new PlaybookGraphNodeRuleError(cloudNode.id, setupGap);
     }
     assertCursorAgentsUseReadOnlyMcp(draft.graph);
+    await assertConnectorWritesAllowedForGraph(input.project, draft.graph);
     const policies = await assertPlaybookCapabilitiesForPublish({
       graph: draft.graph,
       project: input.project,

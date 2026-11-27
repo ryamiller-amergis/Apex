@@ -63,7 +63,7 @@ export const PLAYBOOK_CONNECTORS: readonly PlaybookConnectorDefinition[] = [
   {
     id: 'azure-devops',
     label: 'Azure DevOps',
-    description: 'Read repositories, branches, pull requests, and work items in this project\u2019s Azure DevOps.',
+    description: 'Read and change repositories, pull requests, and work items in this project\u2019s Azure DevOps.',
     operations: [
       {
         id: 'list-repositories',
@@ -152,24 +152,74 @@ export const PLAYBOOK_CONNECTORS: readonly PlaybookConnectorDefinition[] = [
       {
         id: 'create-work-item',
         label: 'Create a work item',
-        description: 'Carry a type, title, and description.',
-        access: 'read',
-        recordsOnly: true,
+        description: 'Create a work item in this project. The result holds its id and link.',
+        access: 'write',
         fields: [
-          { key: 'workItemType', label: 'Work item type' },
-          { key: 'title', label: 'Title' },
-          { key: 'description', label: 'Description', multiline: true },
+          { key: 'workItemType', label: 'Work item type', required: true, hint: 'For example Bug, Product Backlog Item, Task.' },
+          { key: 'title', label: 'Title', required: true },
+          { key: 'description', label: 'Description', multiline: true, hint: 'Markdown. Shown as the description (Repro Steps for a Bug).' },
+        ],
+      },
+      {
+        id: 'update-work-item',
+        label: 'Update a work item',
+        description: 'Set fields on an existing work item.',
+        access: 'write',
+        fields: [
+          { key: 'workItemId', label: 'Work item', required: true, hint: 'The work item number.' },
+          {
+            key: 'fields',
+            label: 'Fields',
+            required: true,
+            multiline: true,
+            hint: 'A JSON object of field names and values, for example {"System.State": "Resolved"}.',
+          },
         ],
       },
       {
         id: 'post-comment',
         label: 'Post a comment',
-        description: 'Carry a work item and a comment.',
-        access: 'read',
-        recordsOnly: true,
+        description: 'Add a comment to a work item.',
+        access: 'write',
         fields: [
-          { key: 'workItemId', label: 'Work item' },
-          { key: 'text', label: 'Comment', multiline: true },
+          { key: 'workItemId', label: 'Work item', required: true, hint: 'The work item number.' },
+          { key: 'text', label: 'Comment', required: true, multiline: true },
+        ],
+      },
+      {
+        id: 'create-pull-request',
+        label: 'Create a pull request',
+        description: 'Open a pull request in a repository. The result holds its link.',
+        access: 'write',
+        fields: [
+          { key: 'repository', label: 'Repository', required: true, hint: 'Repository name.' },
+          { key: 'sourceBranch', label: 'Source branch', required: true, hint: 'Branch name without refs/heads/.' },
+          { key: 'targetBranch', label: 'Target branch', required: true, hint: 'Branch name without refs/heads/.' },
+          { key: 'title', label: 'Title', required: true },
+          { key: 'description', label: 'Description', multiline: true },
+          { key: 'workItemId', label: 'Linked work item', hint: 'Optional work item number.' },
+          { key: 'draft', label: 'Draft', hint: 'true to open it as a draft. Default: false.' },
+        ],
+      },
+      {
+        id: 'rest-write',
+        label: 'Change anything (REST POST, PATCH, PUT, DELETE)',
+        description: 'A write request to any Azure DevOps REST path in this project.',
+        access: 'write',
+        fields: [
+          { key: 'method', label: 'Method', required: true, hint: 'POST, PATCH, PUT, or DELETE.' },
+          {
+            key: 'path',
+            label: 'Path',
+            required: true,
+            hint: 'Relative to this project, for example _apis/wit/workitems/12. The api-version is added when you leave it out.',
+          },
+          { key: 'body', label: 'Body', multiline: true, hint: 'JSON. Leave empty for none.' },
+          {
+            key: 'contentType',
+            label: 'Content type',
+            hint: 'application/json (default) or application/json-patch+json, which work item updates use.',
+          },
         ],
       },
     ],
@@ -202,6 +252,30 @@ export function playbookConnectorOperation(
   operation: string | undefined,
 ): PlaybookConnectorOperation | undefined {
   return playbookConnector(integration)?.operations.find((item) => item.id === operation);
+}
+
+export interface PlaybookConnectorWriteOption {
+  /** `integration/operation`. The id the allow-list stores. */
+  id: string;
+  integrationLabel: string;
+  label: string;
+  description: string;
+}
+
+/** Every write operation in the catalog. A project allows these one by one. */
+export function playbookConnectorWriteOptions(
+  catalog: readonly PlaybookConnectorDefinition[] = PLAYBOOK_CONNECTORS,
+): PlaybookConnectorWriteOption[] {
+  return catalog.flatMap((connector) =>
+    connector.operations
+      .filter((operation) => operation.access === 'write')
+      .map((operation) => ({
+        id: `${connector.id}/${operation.id}`,
+        integrationLabel: connector.label,
+        label: operation.label,
+        description: operation.description,
+      })),
+  );
 }
 
 /**

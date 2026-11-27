@@ -1,10 +1,19 @@
 const queryWorkItemsByWiql = jest.fn();
+const createWorkItemForPrd = jest.fn();
+const addWorkItemComment = jest.fn();
+const createPullRequest = jest.fn();
 jest.mock('../services/azureDevOps', () => ({
-  AzureDevOpsService: jest.fn().mockImplementation(() => ({ queryWorkItemsByWiql })),
+  AzureDevOpsService: jest.fn().mockImplementation(() => ({
+    queryWorkItemsByWiql,
+    createWorkItemForPrd,
+    addWorkItemComment,
+    createPullRequest,
+  })),
 }));
 
 import {
   ADO_OPERATIONS,
+  ADO_WRITE_OPERATIONS,
   buildProjectUrl,
 } from '../services/adoConnectorOperations';
 import { playbookConnectorHandlerKeys } from '../services/playbookConnectorHandlers';
@@ -43,6 +52,14 @@ describe('connector catalog and handlers', () => {
     for (const id of Object.keys(ADO_OPERATIONS)) {
       expect(ado.operations.find((operation) => operation.id === id)?.access).toBe('read');
     }
+  });
+
+  it('keeps every Azure DevOps write operation a write, so the guard and allow-list apply', () => {
+    const ado = PLAYBOOK_CONNECTORS.find((connector) => connector.id === 'azure-devops')!;
+    for (const id of Object.keys(ADO_WRITE_OPERATIONS)) {
+      expect(ado.operations.find((operation) => operation.id === id)?.access).toBe('write');
+    }
+    expect(Object.keys(ADO_WRITE_OPERATIONS).filter((id) => id in ADO_OPERATIONS)).toEqual([]);
   });
 });
 
@@ -278,5 +295,183 @@ describe('Azure DevOps read operations', () => {
 
     await expect(ADO_OPERATIONS['list-repositories']({ project: 'MaxView', parameters: {} }))
       .rejects.toThrow(/not configured/);
+  });
+
+  describe('write operations', () => {
+    it('creates a work item for the run project and returns its id and link', async () => {
+      createWorkItemForPrd.mockResolvedValue({ id: 321, url: `${ORG}/MaxView/_workitems/edit/321` });
+
+      const result = JSON.parse(await ADO_WRITE_OPERATIONS['create-work-item']({
+        project: 'MaxView',
+        parameters: { workItemType: 'Product Backlog Item', title: 'Add export', description: 'Some **text**' },
+      }));
+
+      expect(createWorkItemForPrd).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'Product Backlog Item',
+        title: 'Add export',
+        description: expect.stringContaining('<'),
+        reproStepsHtml: undefined,
+      }));
+      expect(result).toEqual({ id: 321, url: `${ORG}/MaxView/_workitems/edit/321` });
+    });
+
+    it('puts a bug description in Repro Steps too', async () => {
+      createWorkItemForPrd.mockResolvedValue({ id: 1, url: 'u' });
+
+      await ADO_WRITE_OPERATIONS['create-work-item']({
+        project: 'MaxView',
+        parameters: { workItemType: 'Bug', title: 'Crash', description: 'Steps' },
+      });
+
+      const call = createWorkItemForPrd.mock.calls[0][0];
+      expect(call.reproStepsHtml).toBe(call.description);
+      expect(call.reproStepsHtml).toBeTruthy();
+    });
+
+    it('requires a title', async () => {
+      await expect(ADO_WRITE_OPERATIONS['create-work-item']({
+        project: 'MaxView',
+        parameters: { workItemType: 'Bug', title: ' ' },
+      })).rejects.toThrow(/Title is required/);
+      expect(createWorkItemForPrd).not.toHaveBeenCalled();
+    });
+
+    it('updates work item fields with a JSON patch', async () => {
+      fetchMock.mockResolvedValue(respond({ id: 12, rev: 4 }));
+
+      const result = JSON.parse(await ADO_WRITE_OPERATIONS['update-work-item']({
+        project: 'MaxView',
+        parameters: { workItemId: '12', fields: '{"System.State": "Resolved", "Custom.Risk": 3}' },
+      }));
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(new URL(String(url)).pathname).toBe('/acme/MaxView/_apis/wit/workitems/12');
+      expect(init.method).toBe('PATCH');
+      expect(init.headers['Content-Type']).toBe('application/json-patch+json');
+      expect(JSON.parse(init.body)).toEqual([
+        { op: 'add', path: '/fields/System.State', value: 'Resolved' },
+        { op: 'add', path: '/fields/Custom.Risk', value: 3 },
+      ]);
+      expect(result).toEqual({ id: 12, rev: 4 });
+    });
+
+    it.each([
+      ['not JSON', 'System.State=Resolved', /JSON object/],
+      ['a list', '["System.State"]', /JSON object/],
+      ['empty', '{}', /nothing to set/],
+      ['a field name that is a path', '{"/fields/../x": 1}', /is not a field name/],
+      ['a field name with no namespace', '{"State": "Done"}', /is not a field name/],
+    ])('refuses update fields that are %s', async (_label, fields, message) => {
+      await expect(ADO_WRITE_OPERATIONS['update-work-item']({
+        project: 'MaxView',
+        parameters: { workItemId: '12', fields },
+      })).rejects.toThrow(message);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('posts a comment on a work item', async () => {
+      addWorkItemComment.mockResolvedValue({ id: 77 });
+
+      const result = JSON.parse(await ADO_WRITE_OPERATIONS['post-comment']({
+        project: 'MaxView',
+        parameters: { workItemId: '12', text: 'Shipped in 2026.17.0' },
+      }));
+
+      expect(addWorkItemComment).toHaveBeenCalledWith(12, 'Shipped in 2026.17.0');
+      expect(result).toEqual({ commentId: 77, workItemId: 12 });
+    });
+
+    it('creates a pull request between two branches the playbook names', async () => {
+      createPullRequest.mockResolvedValue(`${ORG}/MaxView/_git/api/pullrequest/9`);
+
+      const result = JSON.parse(await ADO_WRITE_OPERATIONS['create-pull-request']({
+        project: 'MaxView',
+        parameters: {
+          repository: 'api',
+          sourceBranch: 'Release/2026.17.0',
+          targetBranch: 'main',
+          title: 'Merge release',
+          workItemId: '55',
+          draft: 'TRUE',
+        },
+      }));
+
+      expect(createPullRequest).toHaveBeenCalledWith({
+        repo: 'api',
+        project: 'MaxView',
+        sourceBranch: 'Release/2026.17.0',
+        targetBranch: 'main',
+        title: 'Merge release',
+        description: '',
+        workItemId: 55,
+        isDraft: true,
+      });
+      expect(result).toEqual({ url: `${ORG}/MaxView/_git/api/pullrequest/9` });
+    });
+
+    it('refuses a draft value that is not true or false', async () => {
+      await expect(ADO_WRITE_OPERATIONS['create-pull-request']({
+        project: 'MaxView',
+        parameters: { repository: 'api', sourceBranch: 'a', targetBranch: 'b', title: 't', draft: 'maybe' },
+      })).rejects.toThrow(/Draft must be/);
+      expect(createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('sends a generic write to a path inside the project', async () => {
+      fetchMock.mockResolvedValue(respond({ id: 5 }));
+
+      await ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method: 'post', path: '_apis/wit/workitems/$Task', body: '[{"op":"add"}]', contentType: 'application/json-patch+json' },
+      });
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(new URL(String(url)).pathname).toBe('/acme/MaxView/_apis/wit/workitems/$Task');
+      expect(init.method).toBe('POST');
+      expect(init.headers['Content-Type']).toBe('application/json-patch+json');
+      expect(init.body).toBe('[{"op":"add"}]');
+    });
+
+    it('reports ok when a generic write returns no body', async () => {
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+      const result = await ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method: 'DELETE', path: '_apis/wit/workitems/9' },
+      });
+
+      expect(JSON.parse(result)).toEqual({ status: 'ok' });
+    });
+
+    it.each([
+      ['GET', /Method must be POST/],
+      ['TRACE', /Method must be POST/],
+    ])('refuses the method %s in a generic write', async (method, message) => {
+      await expect(ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method, path: '_apis/projects' },
+      })).rejects.toThrow(message);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a generic write path that leaves the project', async () => {
+      await expect(ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method: 'POST', path: '../Other/_apis/wit/workitems/$Bug', body: '[]' },
+      })).rejects.toThrow(/inside this project/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a body that is not JSON and a content type outside the two allowed', async () => {
+      await expect(ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method: 'POST', path: '_apis/x', body: 'not json' },
+      })).rejects.toThrow(/valid JSON/);
+      await expect(ADO_WRITE_OPERATIONS['rest-write']({
+        project: 'MaxView',
+        parameters: { method: 'POST', path: '_apis/x', body: '{}', contentType: 'text/html' },
+      })).rejects.toThrow(/Content type must be/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 });

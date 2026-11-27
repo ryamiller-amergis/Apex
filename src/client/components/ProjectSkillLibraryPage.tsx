@@ -21,7 +21,9 @@ import {
   extractSkillFileText,
   useGenerateProjectSkillDraft,
   useProjectSkillLibrary,
+  useProjectConnectorWrites,
   useProjectSkillTools,
+  useSetProjectConnectorWrites,
   useSaveProjectSkill,
   useSetProjectSkillTools,
   useSkillDraftModels,
@@ -685,6 +687,49 @@ const ToolAllowList: React.FC<{ project: string }> = ({ project }) => {
   );
 };
 
+// ── Connector write allow-list (platform admin) ──────────────────────────────
+
+const ConnectorWriteAllowList: React.FC<{ project: string }> = ({ project }) => {
+  const writes = useProjectConnectorWrites(project);
+  const setWrites = useSetProjectConnectorWrites(project);
+  const catalog = writes.data?.catalog ?? [];
+  if (catalog.length === 0) return null;
+  const allowed = writes.data?.allowed ?? [];
+  return (
+    <section
+      className={styles.allowList}
+      aria-labelledby="connector-writes-title"
+      data-testid="skill-library-connector-write-allow-list"
+    >
+      <h2 id="connector-writes-title" className={styles.allowTitle}>Connector writes {project} allows</h2>
+      <p className={styles.toolsHint}>
+        A playbook in this project can publish and run only these connector actions that change
+        something outside Apex. An approval gate must also come before each one. Turning one off
+        stops published playbooks from running it.
+      </p>
+      {catalog.map((option) => (
+        <label key={option.id} className={styles.tool}>
+          <input
+            type="checkbox"
+            checked={allowed.includes(option.id)}
+            disabled={setWrites.isPending}
+            onChange={(event) => {
+              const rest = allowed.filter((id) => id !== option.id);
+              setWrites.mutate(event.target.checked ? [...rest, option.id] : rest);
+            }}
+            data-testid={`skill-library-allow-write-${option.id}`}
+          />
+          <strong>{option.integrationLabel} · {option.label}</strong>
+          <small>{option.description}</small>
+        </label>
+      ))}
+      {setWrites.isError ? (
+        <p className={pageStyles.formError} role="alert">{setWrites.error.message}</p>
+      ) : null}
+    </section>
+  );
+};
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 const SkillTile: React.FC<{ skill: ProjectSkillLibraryItem; onOpen: () => void }> = ({ skill, onOpen }) => {
@@ -813,6 +858,7 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
       </dl>
 
       {isSuperAdmin ? <ToolAllowList project={project} /> : null}
+      {isSuperAdmin ? <ConnectorWriteAllowList project={project} /> : null}
 
       <DataGridToolbar
         searchValue={search}

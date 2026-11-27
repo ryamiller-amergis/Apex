@@ -9,6 +9,7 @@ import {
   playbookConnectorOperation,
 } from '../../../shared/types/playbookConnectors';
 import { playbookConnectorHandler } from '../playbookConnectorHandlers';
+import { assertConnectorWriteAllowed } from '../playbookConnectorWriteAllowListService';
 import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import {
   completeStepRun,
@@ -71,6 +72,12 @@ export async function executeConnectorStep(
       .map((field) => field.label);
     if (missing.length > 0) {
       return failWith(context, `Connector "${context.stepId}" needs ${missing.join(', ')}.`);
+    }
+    // Publishing checked this once. A later change to the allow-list must stop a published version.
+    try {
+      await assertConnectorWriteAllowed(context.project, config.integration, config.operation, context.stepId);
+    } catch (error) {
+      return failWith(context, error instanceof Error ? error.message : String(error));
     }
     try {
       response = capResult(

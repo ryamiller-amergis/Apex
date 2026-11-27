@@ -3,6 +3,11 @@ jest.mock('../services/playbookSteps/stepRuns', () => ({
   failStepRun: jest.fn(),
 }));
 
+const assertWriteAllowed = jest.fn();
+jest.mock('../services/playbookConnectorWriteAllowListService', () => ({
+  assertConnectorWriteAllowed: (...args: unknown[]) => assertWriteAllowed(...args),
+}));
+
 const handler = jest.fn();
 jest.mock('../services/playbookConnectorHandlers', () => ({
   playbookConnectorHandler: (integration: string, operation: string) =>
@@ -72,6 +77,8 @@ describe('playbook connector', () => {
   describe('an operation with a handler', () => {
     beforeEach(() => {
       jest.clearAllMocks();
+      assertWriteAllowed.mockReset();
+      assertWriteAllowed.mockResolvedValue(undefined);
     });
 
     it('calls the system for the run project and keeps the response in result', async () => {
@@ -130,6 +137,33 @@ describe('playbook connector', () => {
       expect(output.truncated).toBe(true);
       expect(output.result.length).toBeLessThanOrEqual(PLAYBOOK_CONNECTOR_RESULT_LIMIT);
       expect(output.result).toContain('Result cut to the size limit');
+    });
+
+    it('asks the allow-list before it runs, for the run project and step', async () => {
+      handler.mockResolvedValue('{"id":1}');
+
+      await executeConnectorStep(context({
+        integration: 'azure-devops',
+        operation: 'create-work-item',
+        parameters: { workItemType: 'Bug', title: 'Broken' },
+      }));
+
+      expect(assertWriteAllowed).toHaveBeenCalledWith('Apex', 'azure-devops', 'create-work-item', 'teams-link');
+      expect(handler).toHaveBeenCalled();
+    });
+
+    it('does not call the system when the project has not allowed the write', async () => {
+      assertWriteAllowed.mockRejectedValue(new Error('Apex has not allowed "Azure DevOps · Create a work item" in playbooks.'));
+
+      await expect(executeConnectorStep(context({
+        integration: 'azure-devops',
+        operation: 'create-work-item',
+        parameters: { workItemType: 'Bug', title: 'Broken' },
+      }))).rejects.toThrow(/has not allowed/);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(completeStepRun).not.toHaveBeenCalled();
+      expect(failStepRun).toHaveBeenCalled();
     });
 
     it('fails an operation that is not recordsOnly and has no handler', async () => {

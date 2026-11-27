@@ -90,6 +90,46 @@ export function useSetProjectSkillTools(project: string) {
   });
 }
 
+export interface ConnectorWriteOption {
+  /** `integration/operation`. */
+  id: string;
+  integrationLabel: string;
+  label: string;
+  description: string;
+}
+
+export interface ProjectConnectorWrites {
+  /** Every connector operation that changes something outside Apex. */
+  catalog: ConnectorWriteOption[];
+  /** The ids this project allows. */
+  allowed: string[];
+}
+
+export function useProjectConnectorWrites(project: string) {
+  return useQuery({
+    queryKey: ['project-connector-writes', project],
+    queryFn: () =>
+      apiRequest<ProjectConnectorWrites>(`/api/playbooks/connector-writes?${projectQuery(project)}`),
+    enabled: Boolean(project),
+  });
+}
+
+/** Platform admins only. Replaces the project's allowed connector writes. */
+export function useSetProjectConnectorWrites(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (operations: string[]) =>
+      apiRequest<ProjectConnectorWrites>(`/api/playbooks/connector-writes?${projectQuery(project)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operations }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['project-connector-writes', project], data);
+    },
+  });
+}
+
 export interface SkillDraftModel {
   id: string;
   label: string;
