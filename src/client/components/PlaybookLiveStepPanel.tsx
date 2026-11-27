@@ -75,6 +75,12 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const nowDoing = live && !(chatting && !step.agentRunId) ? activity.data?.agentRun?.label ?? null : null;
   // A chat needs room for the proposal, the message box and the log, so it opens large.
   const [maximized, setMaximized] = useState(chatting);
+  // The step runs for a moment before it parks as a chat, so the panel can mount before `chatting`.
+  const wasChatting = useRef(chatting);
+  useEffect(() => {
+    if (chatting && !wasChatting.current) setMaximized(true);
+    wasChatting.current = chatting;
+  }, [chatting]);
   const large = expanded && maximized;
   const split = large && (chatting || deciding);
   const [chatMessage, setChatMessage] = useState('');

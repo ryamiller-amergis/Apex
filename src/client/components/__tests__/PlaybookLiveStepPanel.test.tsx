@@ -147,6 +147,22 @@ describe('PlaybookLiveStepPanel', () => {
     expect(chat.closest('[data-split="true"]')).not.toBeNull();
   });
 
+  it('goes full size when a running step turns into a chat', () => {
+    const running = agentStep({ status: 'running', outputInline: null });
+    const props = {
+      project: 'Apex',
+      runId: 'run-1',
+      expanded: true,
+      onExpandedChange: jest.fn(),
+      onClose: jest.fn(),
+    };
+    const { rerender } = render(<PlaybookLiveStepPanel {...props} step={running} />);
+    expect(screen.getByTestId('playbook-live-step-panel').className).not.toContain('panelMaximized');
+
+    rerender(<PlaybookLiveStepPanel {...props} step={agentStep()} />);
+    expect(screen.getByTestId('playbook-live-step-panel').className).toContain('panelMaximized');
+  });
+
   it('shrinks with the toggle or Escape, then collapses on a second Escape', () => {
     const { onExpandedChange } = renderPanel(agentStep());
     const toggle = screen.getByTestId('playbook-live-step-panel-maximize');
