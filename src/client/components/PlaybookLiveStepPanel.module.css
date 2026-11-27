@@ -96,6 +96,100 @@
   resize: vertical;
 }
 
+/* A chat takes the whole panel. The log and the input and output open beside it on request. */
+.content[data-split='true'][data-chat='true'] .side {
+  flex: 1 1 0;
+  min-width: 0;
+  border-right: none;
+  overflow: hidden;
+}
+
+.content[data-split='true'][data-chat='true'][data-detail='true'] .side {
+  border-right: 1px solid var(--border-color);
+}
+
+.content[data-split='true'][data-chat='true'] .main {
+  flex: 0 0 min(36rem, 45%);
+}
+
+.content[data-split='true'][data-chat='true'] .decision {
+  width: 100%;
+  max-width: 60rem;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0.9rem 1.1rem;
+}
+
+.content[data-split='true'][data-chat='true'] .chatThread {
+  min-height: 0;
+  padding: 0.25rem 0.1rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.content[data-split='true'][data-chat='true'] .chatMessage {
+  max-width: 92%;
+}
+
+.content[data-split='true'][data-chat='true'] .chatBubble {
+  font-size: 0.88rem;
+}
+
+.content[data-split='true'][data-chat='true'] .proposal {
+  flex: none;
+}
+
+.content[data-split='true'][data-chat='true'] .decisionReport {
+  max-height: 9rem;
+}
+
+.content[data-split='true'][data-chat='true'] .decision textarea {
+  min-height: 84px;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detailToggles {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.detailToggle {
+  height: 1.8rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detailToggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.detailToggle[aria-pressed='true'] {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.detailToggle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
 .chatThread {
   display: flex;
   flex-direction: column;

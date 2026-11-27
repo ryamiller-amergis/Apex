@@ -46,6 +46,10 @@ function agentStep(overrides: Partial<PlaybookStepRun> = {}): PlaybookStepRun {
   } as PlaybookStepRun;
 }
 
+function openLog() {
+  fireEvent.click(screen.getByTestId('playbook-live-step-panel-tab-log'));
+}
+
 function renderPanel(step: PlaybookStepRun, expanded = true) {
   const onExpandedChange = jest.fn();
   render(
@@ -106,6 +110,7 @@ describe('PlaybookLiveStepPanel', () => {
 
   it('says the agent is starting instead of showing a queued agent', () => {
     renderPanel(agentStep());
+    openLog();
     expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('Starting the agent');
     expect(screen.queryByLabelText('Progress')).not.toBeInTheDocument();
     expect(screen.queryByText('Waiting for the first output…')).not.toBeInTheDocument();
@@ -121,6 +126,7 @@ describe('PlaybookLiveStepPanel', () => {
         lastTurnError: 'The agent could not start from the step\'s prompt: Admission is full.',
       },
     }));
+    openLog();
     expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('did not start');
     expect(screen.getByRole('alert')).toHaveTextContent('Admission is full');
   });
@@ -129,22 +135,71 @@ describe('PlaybookLiveStepPanel', () => {
     renderPanel(agentStep({
       outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 1 },
     }));
+    openLog();
     expect(screen.getByTestId('playbook-step-awaiting-message')).toHaveTextContent('finished its turn');
   });
 
   it('shows the progress tracker while a turn is running', () => {
     renderPanel(agentStep({ agentRunId: 'agent-run-1' }));
+    openLog();
     expect(screen.queryByTestId('playbook-step-awaiting-message')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Progress')).toBeInTheDocument();
   });
 
-  it('opens an interactive chat filling the page, side by side with the log', () => {
+  it('opens an interactive chat filling the page, with the log and input and output closed', () => {
     renderPanel(agentStep());
     const panel = screen.getByTestId('playbook-live-step-panel');
     expect(panel.className).toContain('panelMaximized');
     expect(screen.getByTestId('playbook-live-step-panel-maximize')).toHaveAttribute('aria-pressed', 'true');
     const chat = screen.getByTestId('playbook-interactive-chat');
     expect(chat.closest('[data-split="true"]')).not.toBeNull();
+    expect(chat.closest('[data-detail]')).toBeNull();
+    expect(screen.queryByTestId('playbook-step-awaiting-message')).not.toBeInTheDocument();
+    expect(screen.getByTestId('playbook-live-step-panel-tab-log')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('playbook-live-step-panel-tab-details')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('opens the log beside the chat and closes it with the same toggle', () => {
+    renderPanel(agentStep());
+    const log = screen.getByTestId('playbook-live-step-panel-tab-log');
+    const details = screen.getByTestId('playbook-live-step-panel-tab-details');
+
+    fireEvent.click(log);
+    expect(log).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('playbook-step-awaiting-message')).toBeInTheDocument();
+    expect(screen.getByTestId('playbook-interactive-chat').closest('[data-detail="true"]')).not.toBeNull();
+
+    fireEvent.click(details);
+    expect(log).toHaveAttribute('aria-pressed', 'false');
+    expect(details).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('playbook-step-awaiting-message')).not.toBeInTheDocument();
+
+    fireEvent.click(details);
+    expect(details).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('playbook-interactive-chat').closest('[data-detail]')).toBeNull();
+  });
+
+  it('shows a proposal problem only for a proposal an agent wrote', () => {
+    const { unmount } = render(
+      <PlaybookLiveStepPanel project="Apex" runId="run-1" expanded onExpandedChange={jest.fn()} onClose={jest.fn()}
+        step={agentStep({
+          outputInline: { threadId: 'thread-1', assigneeUserId: 'user-1', turnCount: 0, proposalReason: 'The proposal is empty.' },
+        })} />,
+    );
+    expect(screen.queryByText('The proposal is empty.')).not.toBeInTheDocument();
+    unmount();
+
+    renderPanel(agentStep({
+      outputInline: {
+        threadId: 'thread-1',
+        assigneeUserId: 'user-1',
+        turnCount: 1,
+        proposalText: 'Ship it.',
+        proposalOk: false,
+        proposalReason: 'The outcome must be one of: approved, rework.',
+      },
+    }));
+    expect(screen.getByText('The outcome must be one of: approved, rework.')).toBeInTheDocument();
   });
 
   it('goes full size when a running step turns into a chat', () => {

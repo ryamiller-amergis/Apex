@@ -35,7 +35,10 @@ import { isSuperAdminUserId } from '../../utils/superAdminUser';
 import type { ExecutionSnapshot } from '../../../shared/types/agentRunLifecycle';
 import type { CursorAgentStepConfig } from '../../../shared/types/playbook';
 import type { PlaybookAgentRunPolicy } from '../../../shared/types/playbookExecutionCapability';
+import { insertMessage } from '../chatThreadRepository';
 import { extractOutcome, promptWithOutcomes } from './agentOutcome';
+import { promptWithHistory } from './agentTaskConversation';
+import { readV2ScorecardFiles } from './v2StepArtifacts';
 import { parseStepInput, parseStepOutput } from './descriptorValidation';
 import {
   checkInteractiveProposal,
@@ -140,6 +143,50 @@ async function lastReply(threadId: string): Promise<{ text: string; outcome?: st
     .find((message) => message.role === 'agent' && !message.hidden && message.text.trim());
   if (!reply) return null;
   return extractOutcome(reply.text);
+}
+
+/**
+ * Writes one side of the chat into the thread. A V2 turn runs on a worker that never writes the
+ * thread, so without this the chat has no record of what the assignee or the agent said. The id is
+ * kept stable by the caller, so writing the same message twice stores it once.
+ */
+async function recordThreadMessage(
+  threadId: string,
+  message: { id: string; role: 'user' | 'agent'; text: string; ts: string },
+): Promise<void> {
+  try {
+    await insertMessage(threadId, message);
+  } catch (error) {
+    console.warn(`[playbook] could not record a chat message on thread ${threadId}:`, error);
+  }
+}
+
+/**
+ * The agent's reply to a finished turn. A V2 worker keeps the reply as an artifact of its run and
+ * writes nothing to the thread, so the artifact is read first and then copied into the thread for
+ * the chat and for the next turn. A run on the in-process path already wrote the thread.
+ */
+async function turnReply(
+  agentRunId: string,
+  threadId: string,
+): Promise<{ text: string; outcome?: string } | null> {
+  let files: Awaited<ReturnType<typeof readV2ScorecardFiles>>;
+  try {
+    files = await readV2ScorecardFiles(agentRunId);
+  } catch (error) {
+    console.warn(`[playbook] could not read the reply artifact of run ${agentRunId}:`, error);
+  }
+  const artifact = files?.reply?.trim();
+  if (artifact) {
+    await recordThreadMessage(threadId, {
+      id: `${agentRunId}-reply`,
+      role: 'agent',
+      text: artifact,
+      ts: nowIso(),
+    });
+    return extractOutcome(artifact);
+  }
+  return lastReply(threadId);
 }
 
 /**
@@ -357,12 +404,16 @@ async function launchInteractiveTurn(input: {
   const model = config.model?.trim() || skillConfig?.defaultModel?.trim() || (await getDefaultModel());
 
   let agentRunId: string | null = null;
-  if (await isV2TransportEnabled(input.userId, row.project)) {
+  const viaV2 = await isV2TransportEnabled(input.userId, row.project);
+  const sentAt = nowIso();
+  if (viaV2) {
+    // A V2 turn is a new agent with no memory, so it is given the chat so far.
+    const earlier = await getThread(threadId);
     agentRunId = await routeTurnThroughV2({
       userId: input.userId,
       project: row.project,
       threadId,
-      prompt,
+      prompt: promptWithHistory(prompt, earlier?.messages ?? []),
       model,
       skillContent,
       skillCompanions,
@@ -402,6 +453,10 @@ async function launchInteractiveTurn(input: {
   if (claimed.length === 0) {
     throw new AgentTaskChatError('A turn is already running.');
   }
+  // The in-process path writes the assignee's message itself. A V2 worker does not.
+  if (viaV2) {
+    await recordThreadMessage(threadId, { id: `${agentRunId}-prompt`, role: 'user', text: message, ts: sentAt });
+  }
 }
 
 /** A finished turn stays on the step. The Playbook resumes only when the assignee approves. */
@@ -424,13 +479,16 @@ export async function recordInteractiveTurnFinished(input: {
     ))
     .limit(1);
   if (!row || !isInteractiveStepDraft(row.outputInline)) return false;
-  const reply = input.failedReason
-    ? null
-    : await lastReply(input.threadId || row.resumeToken || row.outputInline.threadId);
+  const threadId = input.threadId || row.resumeToken || row.outputInline.threadId;
+  const reply = input.failedReason ? null : await turnReply(input.agentRunId, threadId);
+  // A turn that ends without any text is a failed turn. Recording it as an empty proposal would
+  // hide that an agent ran at all.
+  const failedReason = input.failedReason
+    ?? (reply ? undefined : 'The agent finished without sending a reply. Send a message to continue.');
   const next = draftAfterTurn({
     draft: row.outputInline,
     reply,
-    failedReason: input.failedReason,
+    failedReason,
   });
   const updated = await db.update(playbookStepRuns)
     .set({ agentRunId: null, outputInline: draftRecord(next), updatedAt: nowIso() })

@@ -46,8 +46,19 @@ jest.mock('../services/backgroundWorkflowRouter', () => ({
   routeBackgroundWorkflow: (...a: unknown[]) => routeBackgroundWorkflow(...a),
 }));
 
+const insertMessage = jest.fn();
+jest.mock('../services/chatThreadRepository', () => ({
+  insertMessage: (...a: unknown[]) => insertMessage(...a),
+}));
+
+const readV2ScorecardFiles = jest.fn();
+jest.mock('../services/playbookSteps/v2StepArtifacts', () => ({
+  readV2ScorecardFiles: (...a: unknown[]) => readV2ScorecardFiles(...a),
+}));
+
 jest.mock('../services/appSettingsService', () => ({ getDefaultModel: jest.fn().mockResolvedValue('default-model') }));
 
+const prepareBackgroundWorkflowTurn = jest.fn();
 const createThread = jest.fn();
 const getThread = jest.fn();
 const cancelRun = jest.fn();
@@ -57,7 +68,7 @@ jest.mock('../services/chatAgentService', () => ({
   getThread: (...a: unknown[]) => getThread(...a),
   cancelRun: (...a: unknown[]) => cancelRun(...a),
   closeThread: (...a: unknown[]) => closeThread(...a),
-  prepareBackgroundWorkflowTurn: jest.fn().mockResolvedValue({ prompt: 'prepared' }),
+  prepareBackgroundWorkflowTurn: (...a: unknown[]) => prepareBackgroundWorkflowTurn(...a),
 }));
 
 const isFeatureEnabled = jest.fn();
@@ -165,6 +176,9 @@ beforeEach(() => {
   updateReturning.mockResolvedValue([{ id: 'step-run-1' }]);
   createThread.mockResolvedValue({ id: 'thread-1' });
   getThread.mockResolvedValue({ messages: [] });
+  prepareBackgroundWorkflowTurn.mockResolvedValue({ prompt: 'prepared' });
+  insertMessage.mockResolvedValue(undefined);
+  readV2ScorecardFiles.mockResolvedValue(undefined);
   getSkillConfig.mockResolvedValue(skillConfig);
   getUserPermissions.mockResolvedValue(new Set(['playbooks:run']));
   isSuperAdminUserId.mockResolvedValue(false);
@@ -454,6 +468,49 @@ describe('a chat turn', () => {
     expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ agentRunId: 'v2-run-1' }));
   });
 
+  it('records the assignee message in the thread on a V2 turn, because the worker does not', async () => {
+    isFeatureEnabled.mockResolvedValue(true);
+    routeBackgroundWorkflow.mockResolvedValue({ route: 'worker', runId: 'v2-run-1' });
+    selectRows.mockResolvedValue([openRow(blankDraft())]);
+
+    await sendInteractiveTurn({ runId: 'run-1', stepRunId: 'step-run-1', userId: ASSIGNEE, message: 'go' });
+
+    expect(insertMessage).toHaveBeenCalledWith(
+      'thread-1',
+      expect.objectContaining({ id: 'v2-run-1-prompt', role: 'user', text: 'go' }),
+    );
+  });
+
+  it('tells a V2 turn what was said before, since each turn is a new agent', async () => {
+    isFeatureEnabled.mockResolvedValue(true);
+    routeBackgroundWorkflow.mockImplementation(async (input: { prepareWorker: () => Promise<unknown> }) => {
+      await input.prepareWorker();
+      return { route: 'worker', runId: 'v2-run-2' };
+    });
+    getThread.mockResolvedValue({
+      messages: [
+        { id: 'p1', role: 'user', text: 'Draft the notes.', ts: '2026-11-27T10:00:00.000Z' },
+        { id: 'r1', role: 'agent', text: 'Which release?', ts: '2026-11-27T10:01:00.000Z' },
+      ],
+    });
+    selectRows.mockResolvedValue([openRow(blankDraft({ turnCount: 1 }))]);
+
+    await sendInteractiveTurn({ runId: 'run-1', stepRunId: 'step-run-1', userId: ASSIGNEE, message: 'The 1.12 release.' });
+
+    const prompt = prepareBackgroundWorkflowTurn.mock.calls[0][1] as string;
+    expect(prompt).toContain('**Assignee:** Draft the notes.');
+    expect(prompt).toContain('**Agent:** Which release?');
+    expect(prompt.endsWith('The 1.12 release.')).toBe(true);
+  });
+
+  it('does not write the assignee message itself on the in-process path', async () => {
+    selectRows.mockResolvedValue([openRow(blankDraft())]);
+
+    await sendInteractiveTurn({ runId: 'run-1', stepRunId: 'step-run-1', userId: ASSIGNEE, message: 'go' });
+
+    expect(insertMessage).not.toHaveBeenCalled();
+  });
+
   it('refuses the turn when the V2 worker did not take it', async () => {
     isFeatureEnabled.mockResolvedValue(true);
     routeBackgroundWorkflow.mockResolvedValue({ route: 'in-process' });
@@ -574,6 +631,61 @@ describe('a finished turn', () => {
       }),
     );
     expect(resumeStepRun).not.toHaveBeenCalled();
+  });
+
+  it('takes the reply of a V2 turn from its artifact and copies it into the thread', async () => {
+    selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
+    readV2ScorecardFiles.mockResolvedValue({ reply: 'The cause is a stale cache.' });
+
+    await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'v2-run-1', threadId: 'thread-1' });
+
+    expect(readV2ScorecardFiles).toHaveBeenCalledWith('v2-run-1');
+    expect(getThread).not.toHaveBeenCalled();
+    expect(insertMessage).toHaveBeenCalledWith(
+      'thread-1',
+      expect.objectContaining({ id: 'v2-run-1-reply', role: 'agent', text: 'The cause is a stale cache.' }),
+    );
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputInline: expect.objectContaining({
+          turnCount: 1,
+          proposalText: 'The cause is a stale cache.',
+          proposalOk: true,
+        }),
+      }),
+    );
+  });
+
+  it('falls back to the thread when the artifact cannot be read', async () => {
+    selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
+    readV2ScorecardFiles.mockRejectedValue(new Error('blob unavailable'));
+    getThread.mockResolvedValue(agentReply('From the thread.'));
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'v2-run-1' });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputInline: expect.objectContaining({ proposalText: 'From the thread.', proposalOk: true }),
+      }),
+    );
+  });
+
+  it('records an error, not an empty proposal, when the turn left no reply', async () => {
+    selectRows.mockResolvedValue([{ outputInline: blankDraft(), resumeToken: 'thread-1' }]);
+
+    await recordInteractiveTurnFinished({ stepRunId: 'step-run-1', agentRunId: 'v2-run-1' });
+
+    expect(updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentRunId: null,
+        outputInline: expect.objectContaining({
+          turnCount: 0,
+          proposalText: null,
+          lastTurnError: expect.stringContaining('without sending a reply'),
+        }),
+      }),
+    );
   });
 
   it('reads the outcome the agent picked and marks a proposal that is not on the list', async () => {

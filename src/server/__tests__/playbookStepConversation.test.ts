@@ -1,7 +1,14 @@
 const getThread = jest.fn();
 const getRun = jest.fn();
 
-jest.mock('../db/drizzle', () => ({ db: {} }));
+// Each query ends in .limit(); results come off a queue in call order.
+const queryResults: unknown[][] = [];
+jest.mock('../db/drizzle', () => {
+  const chain: Record<string, unknown> = {};
+  for (const name of ['select', 'from', 'where', 'orderBy']) chain[name] = () => chain;
+  chain.limit = () => Promise.resolve(queryResults.shift() ?? []);
+  return { db: chain };
+});
 jest.mock('../services/chatAgentService', () => ({
   getThread: (...args: unknown[]) => getThread(...args),
 }));
@@ -11,6 +18,7 @@ jest.mock('../services/playbookRunProjectionService', () => ({
 
 import type { ChatMessage } from '../../shared/types/chat';
 import { getPlaybookStepActivity, threadConversation } from '../services/playbookStepActivityService';
+import { promptWithHistory } from '../services/playbookSteps/agentTaskConversation';
 import { promptWithOutcomes, stripOutcomeInstructions } from '../services/playbookSteps/agentOutcome';
 
 function message(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'role' | 'text'>): ChatMessage {
@@ -50,6 +58,7 @@ describe('getPlaybookStepActivity for an interactive Agent task', () => {
   beforeEach(() => {
     getThread.mockReset();
     getRun.mockReset();
+    queryResults.length = 0;
   });
 
   it('returns the chat and the thread log between turns', async () => {
@@ -79,6 +88,23 @@ describe('getPlaybookStepActivity for an interactive Agent task', () => {
     expect(activity?.agentRun).toBeNull();
   });
 
+  it('keeps the log of earlier turns after the latest one finishes', async () => {
+    getRun.mockResolvedValue({
+      steps: [{ id: 'row-1', stepType: 'cursor-agent', status: 'suspended', agentRunId: null, outputInline: draft }],
+    });
+    getThread.mockResolvedValue({ messages: [message({ id: 'u1', role: 'user', text: 'Draft the notes.' })] });
+    // The turn runs newest first, then the events of each run in that order.
+    queryResults.push(
+      [{ id: 'run-2' }, { id: 'run-1' }],
+      [{ eventId: 'e1', detail: null, event: { type: 'tool_call', toolName: 'read' }, at: '2026-11-24T19:25:00.000Z' }],
+      [{ eventId: 'e2', detail: null, event: { type: 'tool_call', toolName: 'write' }, at: '2026-11-24T19:40:00.000Z' }],
+    );
+
+    const activity = await getPlaybookStepActivity({ project: 'Apex', runId: 'run-1', stepRunId: 'row-1' });
+
+    expect(activity?.entries.filter((entry) => entry.kind === 'tool').map((entry) => entry.title)).toEqual(['read', 'write']);
+  });
+
   it('leaves the chat off an autonomous Agent task', async () => {
     getRun.mockResolvedValue({
       steps: [{ id: 'row-1', stepType: 'cursor-agent', status: 'running', agentRunId: null, outputInline: null }],
@@ -86,5 +112,22 @@ describe('getPlaybookStepActivity for an interactive Agent task', () => {
     const activity = await getPlaybookStepActivity({ project: 'Apex', runId: 'run-1', stepRunId: 'row-1' });
     expect(activity?.conversation).toBeUndefined();
     expect(getThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('promptWithHistory', () => {
+  it('gives back the prompt when there is no earlier chat', () => {
+    expect(promptWithHistory('Start.', [])).toBe('Start.');
+  });
+
+  it('puts the earlier chat in front of the new message', () => {
+    const prompt = promptWithHistory('Make it shorter.', [
+      message({ id: 'u1', role: 'user', text: promptWithOutcomes('Draft the notes.', ['done']) }),
+      message({ id: 'a1', role: 'agent', text: 'Here is the draft.\nOUTCOME: done' }),
+    ]);
+    expect(prompt).toContain('**Assignee:** Draft the notes.');
+    expect(prompt).toContain('**Agent:** Here is the draft.');
+    expect(prompt).not.toContain('OUTCOME: done');
+    expect(prompt.endsWith('Make it shorter.')).toBe(true);
   });
 });

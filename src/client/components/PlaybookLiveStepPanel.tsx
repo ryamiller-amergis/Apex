@@ -58,6 +58,8 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   'data-testid': testId = 'playbook-live-step-panel',
 }) => {
   const [tab, setTab] = useState<'log' | 'details'>('log');
+  // A chat keeps the log and the input and output out of the way until the assignee asks for them.
+  const [detailOpen, setDetailOpen] = useState(false);
   const live = LIVE_STATUSES.includes(step.status);
   const now = useNow(live);
   const meta = stepMeta(step.stepType);
@@ -94,6 +96,7 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const proposalReason = typeof draft?.proposalReason === 'string' ? draft.proposalReason : '';
   const lastTurnError = typeof draft?.lastTurnError === 'string' ? draft.lastTurnError : '';
   const rejectedRevisions = typeof draft?.rejectedRevisions === 'number' ? draft.rejectedRevisions : 0;
+  const turnCount = typeof draft?.turnCount === 'number' ? draft.turnCount : 0;
   const chatClosed = rejectedRevisions >= 1;
   const conversation = chatting ? activity.data?.conversation ?? [] : [];
   const agentWorking = Boolean(step.agentRunId) || interactiveTurn.isPending;
@@ -120,6 +123,15 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
     window.addEventListener('keydown', shrink);
     return () => window.removeEventListener('keydown', shrink);
   }, [expanded, maximized, onExpandedChange]);
+
+  const toggleDetail = (value: 'log' | 'details') => {
+    if (detailOpen && tab === value) {
+      setDetailOpen(false);
+      return;
+    }
+    setTab(value);
+    setDetailOpen(true);
+  };
 
   const toggleLarge = () => {
     if (large) {
@@ -201,14 +213,35 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
       </div>
 
       {expanded ? (
-        <div className={styles.content} data-split={split ? 'true' : undefined}>
+        <div
+          className={styles.content}
+          data-split={split ? 'true' : undefined}
+          data-chat={chatting ? 'true' : undefined}
+          data-detail={chatting && detailOpen ? 'true' : undefined}
+        >
           {chatting || deciding ? (
             <div className={styles.side}>
               {chatting ? (
                 <div className={styles.decision} {...{ 'data-testid': 'playbook-interactive-chat' }}>
-                  <p className={styles.decisionLead}>
-                    Chat with the agent, then approve a result that passes its checks.
-                  </p>
+                  <div className={styles.chatHeader}>
+                    <p className={styles.decisionLead}>
+                      Chat with the agent, then approve a result that passes its checks.
+                    </p>
+                    <div className={styles.detailToggles} role="group" aria-label="Show step detail">
+                      {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={styles.detailToggle}
+                          aria-pressed={detailOpen && tab === value}
+                          onClick={() => toggleDetail(value)}
+                          {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <ol
                     ref={threadRef}
                     className={styles.chatThread}
@@ -241,7 +274,9 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
                       <pre className={styles.decisionReport}>{proposalText}</pre>
                     </div>
                   ) : null}
-                  {proposalReason ? <p className={styles.decisionError} role="alert">{proposalReason}</p> : null}
+                  {proposalText && proposalReason && turnCount > 0 ? (
+                    <p className={styles.decisionError} role="alert">{proposalReason}</p>
+                  ) : null}
                   {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
                   {chatClosed ? (
                     <p className={styles.decisionMissing}>New messages are closed. Approve the proposal or cancel the run.</p>
@@ -343,30 +378,34 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
               ) : null}
             </div>
           ) : null}
-          <div className={styles.main}>
-            <div className={styles.tabs} role="tablist" aria-label="Step detail">
-              {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === value}
-                  className={`${styles.tab} ${tab === value ? styles.tabActive : ''}`}
-                  onClick={() => setTab(value)}
-                  {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className={styles.body}>
-              {tab === 'log' ? (
-                <StepLog key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
-              ) : (
-                <StepDetails key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
+          {!chatting || detailOpen ? (
+            <div className={styles.main}>
+              {chatting ? null : (
+                <div className={styles.tabs} role="tablist" aria-label="Step detail">
+                  {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === value}
+                      className={`${styles.tab} ${tab === value ? styles.tabActive : ''}`}
+                      onClick={() => setTab(value)}
+                      {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               )}
+              <div className={styles.body}>
+                {tab === 'log' ? (
+                  <StepLog key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
+                ) : (
+                  <StepDetails key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
+                )}
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       ) : null}
     </section>
