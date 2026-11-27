@@ -151,6 +151,10 @@ const CONNECTOR_OUTPUT_SCHEMA = z.object({
   integration: z.string(),
   operation: z.string(),
   parameters: z.record(z.string(), z.string()).optional(),
+  /** The system's response as text. Later steps read it with `${steps.<id>.result}`. */
+  result: z.string().optional(),
+  /** True when `result` was cut to the size limit. */
+  truncated: z.boolean().optional(),
   recordedAt: READABLE_TIMESTAMP,
 });
 
@@ -437,7 +441,8 @@ export const PRODUCTION_STEP_TYPES: readonly PlaybookStepTypeDescriptor[] = [
     schemaVersion: 1,
     canSuspend: false,
     isAgentStep: false,
-    // Records the integration between two steps. It does not call that system.
+    // Classified by step type as a read. An operation that writes outside Apex is caught by the
+    // guard, which looks at the configured operation (`connectorConfigWrites`).
     sideEffect: 'read',
     requiredPermissions: ['playbooks:run'],
     inputSchema: CONNECTOR_INPUT_SCHEMA,

@@ -1243,7 +1243,7 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
         label="Integration"
         htmlFor={`${node.id}-integration`}
         required
-        hint="The system this connector names. A run records the choice and does not call the system yet."
+        hint="The system this connector reaches, using this project's access."
         {...{ 'data-testid': `playbook-field-${node.id}-integration` }}
       >
         <PlaybookOptionPicker
@@ -1264,6 +1264,13 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
         label="Action"
         htmlFor={`${node.id}-operation`}
         required
+        hint={
+          operation.recordsOnly
+            ? 'This action records the choice and does not call the system yet.'
+            : operation.access === 'write'
+              ? 'This action changes the system, so an approval gate must come before it.'
+              : `Later steps read the response with \${steps.${node.id}.result}.`
+        }
         {...{ 'data-testid': `playbook-field-${node.id}-operation` }}
       >
         <PlaybookOptionPicker
@@ -1285,6 +1292,7 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
             label={field.label}
             htmlFor={`${node.id}-${field.key}`}
             hint={field.hint}
+            required={field.required}
             {...{ 'data-testid': `playbook-field-${node.id}-${field.key}` }}
           >
             <PlaybookBindingText
