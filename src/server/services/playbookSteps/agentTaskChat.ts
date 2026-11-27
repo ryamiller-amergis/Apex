@@ -10,7 +10,7 @@
  * Every later call here finds its step by the draft kept on the row, so an autonomous task that
  * shares the step type is never touched.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { playbookRuns, playbookStepRuns } from '../../db/schema';
@@ -146,6 +146,22 @@ async function lastReply(threadId: string): Promise<{ text: string; outcome?: st
 }
 
 /**
+ * A UUID that is the same every time for the same seed. The chat's message ids are UUID columns,
+ * and a repeated write of one turn must store one row, not two.
+ */
+export function stableMessageId(seed: string): string {
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 32);
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `5${hex.slice(13, 16)}`,
+    `${variant}${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join('-');
+}
+
+/**
  * Writes one side of the chat into the thread. A V2 turn runs on a worker that never writes the
  * thread, so without this the chat has no record of what the assignee or the agent said. The id is
  * kept stable by the caller, so writing the same message twice stores it once.
@@ -179,7 +195,7 @@ async function turnReply(
   const artifact = files?.reply?.trim();
   if (artifact) {
     await recordThreadMessage(threadId, {
-      id: `${agentRunId}-reply`,
+      id: stableMessageId(`${agentRunId}:reply`),
       role: 'agent',
       text: artifact,
       ts: nowIso(),
@@ -455,7 +471,7 @@ async function launchInteractiveTurn(input: {
   }
   // The in-process path writes the assignee's message itself. A V2 worker does not.
   if (viaV2) {
-    await recordThreadMessage(threadId, { id: `${agentRunId}-prompt`, role: 'user', text: message, ts: sentAt });
+    await recordThreadMessage(threadId, { id: stableMessageId(`${agentRunId}:prompt`), role: 'user', text: message, ts: sentAt });
   }
 }
 

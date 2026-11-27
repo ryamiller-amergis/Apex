@@ -126,6 +126,7 @@ import {
   decideInteractiveProposal,
   recordInteractiveTurnFinished,
   sendInteractiveTurn,
+  stableMessageId,
   startAgentTaskChat,
   warnInteractiveExpiring,
 } from '../services/playbookSteps/agentTaskChat';
@@ -423,6 +424,19 @@ function openRow(draft: unknown, overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe('stableMessageId', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  it('makes a UUID, the form the chat message id column requires', () => {
+    expect(stableMessageId('run-1:reply')).toMatch(UUID);
+  });
+
+  it('gives the same id for the same seed, and different ids for different seeds', () => {
+    expect(stableMessageId('run-1:reply')).toBe(stableMessageId('run-1:reply'));
+    expect(stableMessageId('run-1:reply')).not.toBe(stableMessageId('run-1:prompt'));
+  });
+});
+
 describe('a chat turn', () => {
   it('runs on the chat thread as its own agent run and records the run id on the step', async () => {
     selectRows.mockResolvedValue([openRow(blankDraft())]);
@@ -477,7 +491,7 @@ describe('a chat turn', () => {
 
     expect(insertMessage).toHaveBeenCalledWith(
       'thread-1',
-      expect.objectContaining({ id: 'v2-run-1-prompt', role: 'user', text: 'go' }),
+      expect.objectContaining({ id: stableMessageId('v2-run-1:prompt'), role: 'user', text: 'go' }),
     );
   });
 
@@ -643,7 +657,7 @@ describe('a finished turn', () => {
     expect(getThread).not.toHaveBeenCalled();
     expect(insertMessage).toHaveBeenCalledWith(
       'thread-1',
-      expect.objectContaining({ id: 'v2-run-1-reply', role: 'agent', text: 'The cause is a stale cache.' }),
+      expect.objectContaining({ id: stableMessageId('v2-run-1:reply'), role: 'agent', text: 'The cause is a stale cache.' }),
     );
     expect(updateSet).toHaveBeenCalledWith(
       expect.objectContaining({
