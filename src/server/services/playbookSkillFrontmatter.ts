@@ -9,6 +9,8 @@ export interface PlaybookSkillFrontmatter {
   skillType: 'autonomous' | 'interactive' | null;
   outputKind: string | null;
   declaresCapabilities: boolean;
+  /** The tools named in `playbook-capabilities`, in the order written. Empty when the line is absent. */
+  capabilities: string[];
 }
 
 export class PlaybookSkillFrontmatterError extends Error {
@@ -58,12 +60,23 @@ export function parsePlaybookSkillFrontmatter(content: string): PlaybookSkillFro
   if (outputKindRaw && !OUTPUT_KINDS.has(outputKindRaw)) {
     throw new PlaybookSkillFrontmatterError(`The output kind "${outputKindRaw}" is not one of the four kinds.`);
   }
+  const declaresCapabilities = Object.prototype.hasOwnProperty.call(record, 'playbook-capabilities');
+  const rawCapabilities = record['playbook-capabilities'];
+  if (declaresCapabilities && !Array.isArray(rawCapabilities)) {
+    throw new PlaybookSkillFrontmatterError(
+      'playbook-capabilities must be a list on one line, for example: playbook-capabilities: [azure-cli]',
+    );
+  }
+  const capabilities = declaresCapabilities
+    ? (rawCapabilities as unknown[]).filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : [];
   return {
     name,
     description,
     skillType: skillTypeRaw ? (skillTypeRaw as 'autonomous' | 'interactive') : null,
     outputKind: outputKindRaw || null,
-    declaresCapabilities: Object.prototype.hasOwnProperty.call(record, 'playbook-capabilities'),
+    declaresCapabilities,
+    capabilities,
   };
 }
 

@@ -11,6 +11,7 @@ import {
 } from '../db/schema';
 import { bundleHashV1, type SkillBundleCompanion } from './playbookSkillBundle';
 import { declaredSkillType, parsePlaybookSkillFrontmatter } from './playbookSkillFrontmatter';
+import { assertSkillToolsAllowed, PlaybookToolAllowListError } from './playbookToolAllowListService';
 
 const PROJECT_SKILL_PATH =
   /^project-skills\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/SKILL\.md$/i;
@@ -101,12 +102,20 @@ export async function saveProjectPlaybookSkill(input: {
   createdBy: string;
   companions?: SkillBundleCompanion[];
   status?: 'draft' | 'published';
-  /** The incident move is the one skill allowed to declare a capability. */
+  /**
+   * Skips the project allow-list. Only Apex's own copy of a foundation skill sets this; a skill a
+   * person writes must name only tools its project allows.
+   */
   allowCapabilities?: boolean;
 }): Promise<{ skillId: string; versionId: string; path: string }> {
   const frontmatter = parsePlaybookSkillFrontmatter(input.content);
   if (frontmatter.declaresCapabilities && !input.allowCapabilities) {
-    throw new ProjectPlaybookSkillError('A new project skill cannot declare playbook capabilities.');
+    try {
+      await assertSkillToolsAllowed(input.project, frontmatter.capabilities);
+    } catch (error) {
+      if (error instanceof PlaybookToolAllowListError) throw new ProjectPlaybookSkillError(error.message);
+      throw error;
+    }
   }
   if (Buffer.byteLength(input.content, 'utf8') > MAX_SKILL_BYTES) {
     throw new ProjectPlaybookSkillError('The skill is over 200,000 bytes.');

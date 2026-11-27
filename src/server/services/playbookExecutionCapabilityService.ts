@@ -6,6 +6,7 @@ import {
   type PlaybookAgentRunPolicy,
   type PlaybookCapability,
 } from '../../shared/types/playbookExecutionCapability';
+import { PLAYBOOK_SKILL_TOOL_IDS } from '../../shared/constants/playbookSkillTools';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 import {
@@ -194,9 +195,12 @@ export function resolvePlaybookAgentRunPolicy(
   }
   const declared = parsePlaybookSkillCapabilities(input.skillContent);
   const requested: PlaybookCapability[] = ['repository-read', 'network-read'];
-  // A Skill that names azure-cli is allowed to run Azure CLI in the worker shell.
-  // The shell stays closed for every other Skill, including one with no capability list.
-  if (declared?.includes('azure-cli')) requested.push('azure-cli');
+  // A Skill gets a tool only when the tool catalog lists it and the Skill names it (azure-cli runs
+  // Azure CLI in the worker shell). A capability outside the catalog, such as external-write, is
+  // never granted from a Skill. The shell stays closed for a Skill with no capability list.
+  for (const tool of PLAYBOOK_SKILL_TOOL_IDS) {
+    if (declared?.includes(tool)) requested.push(tool);
+  }
 
   const provider =
     input.provider === 'ado'

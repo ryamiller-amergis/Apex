@@ -9,6 +9,8 @@ const generate = jest.fn();
 jest.mock('../../hooks/useProjectSkillLibrary', () => ({
   useProjectSkillLibrary: () => ({ isPending: false, isError: false, data: { skills: [] } }),
   useSaveProjectSkill: () => ({ mutateAsync: jest.fn(), isPending: false }),
+  useProjectSkillTools: () => ({ data: { catalog: [], allowed: [] } }),
+  useSetProjectSkillTools: () => ({ mutate: jest.fn(), isPending: false, isError: false }),
   useSkillDraftModels: () => ({ data: [] }),
   useGenerateProjectSkillDraft: () => ({ mutateAsync: generate, isPending: false }),
   extractSkillFileText: jest.fn(),

@@ -48,6 +48,12 @@ import {
 } from '../services/playbookProjectSkillService';
 import { PlaybookSkillFrontmatterError } from '../services/playbookSkillFrontmatter';
 import {
+  listAllowedPlaybookTools,
+  PlaybookToolAllowListError,
+  setAllowedPlaybookTools,
+} from '../services/playbookToolAllowListService';
+import { PLAYBOOK_SKILL_TOOLS } from '../../shared/constants/playbookSkillTools';
+import {
   extractSkillFileText,
   generateProjectSkillDraft,
   listSkillDraftModels,
@@ -891,6 +897,47 @@ router.get(
       return;
     }
     res.json({ skills: await listProjectSkillLibrary(project) });
+  },
+);
+
+router.get(
+  '/project-skills/tools',
+  requireAnyPermission('skills:view', 'skills:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json({ catalog: PLAYBOOK_SKILL_TOOLS, allowed: await listAllowedPlaybookTools(project) });
+  },
+);
+
+// Which tools a project's skills may name is a platform decision, like sharing a template.
+router.put(
+  '/project-skills/tools',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const actorUserId = getUserId(req);
+    const tools = (req.body ?? {}).tools;
+    if (!project || !actorUserId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    if (!Array.isArray(tools) || tools.some((tool) => typeof tool !== 'string')) {
+      res.status(400).json({ error: 'tools must be a list of tool ids.' });
+      return;
+    }
+    try {
+      res.json({ catalog: PLAYBOOK_SKILL_TOOLS, allowed: await setAllowedPlaybookTools({ project, tools, actorUserId }) });
+    } catch (error) {
+      if (error instanceof PlaybookToolAllowListError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   },
 );
 

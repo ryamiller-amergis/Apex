@@ -3950,6 +3950,16 @@ export const projectPlaybookSkillFiles = pgTable('project_playbook_skill_files',
   versionFileUq: unique('uq_project_playbook_skill_files_name').on(t.versionId, t.fileName),
 }));
 
+/** Tools a project lets its skills name in `playbook-capabilities`. A platform admin sets them. */
+export const projectPlaybookTools = pgTable('project_playbook_tools', {
+  project: text('project').notNull(),
+  tool: text('tool').notNull(),
+  enabledBy: text('enabled_by').notNull(),
+  enabledAt: timestamp('enabled_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.project, t.tool] }),
+}));
+
 export const projectPlaybookSkillsRelations = relations(projectPlaybookSkills, ({ many }) => ({
   versions: many(projectPlaybookSkillVersions),
 }));

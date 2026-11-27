@@ -2,7 +2,7 @@
  * Hand-built settings for the step types an author meets most. Each renderer names the config keys
  * it owns; the inspector renders any other schema key with the generic form.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bell,
   BellOff,
@@ -305,6 +305,12 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     description: model.id,
   }));
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
+  // Read-only is the only access an agent step has, so the editor no longer asks for it. The server
+  // still wants the profile named on the step, so the editor stores it.
+  const hasProfile = typeof config.mcpProfile === 'string' && config.mcpProfile.length > 0;
+  useEffect(() => {
+    if (!hasProfile && !disabled) setField('mcpProfile', 'repository-read-only');
+  }, [hasProfile, disabled, setField]);
   return (
     <>
       <Field
@@ -369,28 +375,6 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           disabled={disabled}
           onChange={(value) => setField('model', value)}
           {...{ 'data-testid': "playbook-inspector-field-model" }}
-        />
-      </Field>
-      <Field
-        label="Access"
-        htmlFor={`${node.id}-mcp`}
-        required
-        hint="Read-only access lets the agent run before an approval."
-        {...{ 'data-testid': `playbook-field-${node.id}-mcp` }}
-      >
-        <PlaybookOptionPicker
-          id={`${node.id}-mcp`}
-          value={typeof config.mcpProfile === 'string' ? config.mcpProfile : undefined}
-          options={[{
-            value: 'repository-read-only',
-            label: 'Read-only repository',
-            description: 'Reads code and the network. No external writes or deployment.',
-          }]}
-          placeholder="Choose access"
-          icon={<ShieldCheck size={14} />}
-          disabled={disabled}
-          onChange={(value) => setField('mcpProfile', value)}
-          {...{ 'data-testid': "playbook-inspector-field-mcpProfile" }}
         />
       </Field>
       {interactive ? (
