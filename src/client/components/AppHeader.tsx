@@ -25,7 +25,7 @@ interface NavItem {
 interface AppHeaderProps {
   // `playbooks` is here so the shell can render the flag-gated /playbooks view. It is deliberately
   // *not* a MenuItemKey — the header highlights no nav item for it, because it has none.
-  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
+  currentView: 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'skill-library' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support';
   planningTab: string;
   theme: ThemeMode;
   user: {
@@ -64,6 +64,7 @@ interface AppHeaderProps {
   onNavigateWorkBoard?: () => void;
   workBoardEnabled?: boolean;
   onNavigatePlaybooks?: () => void;
+  onNavigateSkillLibrary?: () => void;
   /** Playbooks stays hidden until the production-adapters flag is on for the project. */
   onNavigateBuilds?: () => void;
   /** `build-from-prompt` evaluated for this user and project. */
@@ -117,6 +118,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onNavigateWorkBoard,
   workBoardEnabled = true,
   onNavigatePlaybooks,
+  onNavigateSkillLibrary,
   onNavigateBuilds,
   buildsEnabled = false,
   onNavigateBrainstorm,
@@ -173,6 +175,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     { label: 'Diagrams', view: 'diagrams', permission: 'diagram:view', onNavigate: onNavigateDiagrams ?? (() => {}) },
     { label: 'Load Tests', view: 'load-tests', permission: 'load-test:view', onNavigate: onNavigateLoadTests ?? (() => {}) },
     { label: 'Playbooks', view: 'playbooks', permission: 'playbooks:view', onNavigate: onNavigatePlaybooks ?? (() => {}) },
+    { label: 'Skill Library', view: 'skill-library', permission: 'skills:view', onNavigate: onNavigateSkillLibrary ?? (() => {}) },
     { label: 'MCP Servers', view: 'mcp-servers', permission: 'mcp-servers:view', onNavigate: onNavigateMcpServers ?? (() => {}) },
     { label: 'Work Board', view: 'work-board', permission: 'work-board:view', onNavigate: onNavigateWorkBoard ?? (() => {}) },
     { label: 'Admin', view: 'admin', permission: 'admin:roles', onNavigate: onNavigateAdmin },
@@ -212,6 +215,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     }
     if (item.view === 'playbooks') {
       return menuEnabledViews.includes('playbooks') && can('playbooks:view');
+    }
+    if (item.view === 'skill-library') {
+      return menuEnabledViews.includes('playbooks') && (can('skills:view') || can('skills:manage'));
     }
     if (item.view === 'mcp-servers') {
       if (!mcpServersEnabled) return false;

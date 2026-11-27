@@ -52,6 +52,84 @@ export function useSaveProjectSkill(project: string) {
   });
 }
 
+export interface SkillToolOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface ProjectSkillTools {
+  /** Every tool Apex offers a skill. */
+  catalog: SkillToolOption[];
+  /** The tool ids this project allows. */
+  allowed: string[];
+}
+
+export function useProjectSkillTools(project: string) {
+  return useQuery({
+    queryKey: ['project-skill-tools', project],
+    queryFn: () =>
+      apiRequest<ProjectSkillTools>(`/api/playbooks/project-skills/tools?${projectQuery(project)}`),
+    enabled: Boolean(project),
+  });
+}
+
+/** Platform admins only. Replaces the project's allowed tools. */
+export function useSetProjectSkillTools(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (tools: string[]) =>
+      apiRequest<ProjectSkillTools>(`/api/playbooks/project-skills/tools?${projectQuery(project)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tools }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['project-skill-tools', project], data);
+    },
+  });
+}
+
+export interface ConnectorWriteOption {
+  /** `integration/operation`. */
+  id: string;
+  integrationLabel: string;
+  label: string;
+  description: string;
+}
+
+export interface ProjectConnectorWrites {
+  /** Every connector operation that changes something outside Apex. */
+  catalog: ConnectorWriteOption[];
+  /** The ids this project allows. */
+  allowed: string[];
+}
+
+export function useProjectConnectorWrites(project: string) {
+  return useQuery({
+    queryKey: ['project-connector-writes', project],
+    queryFn: () =>
+      apiRequest<ProjectConnectorWrites>(`/api/playbooks/connector-writes?${projectQuery(project)}`),
+    enabled: Boolean(project),
+  });
+}
+
+/** Platform admins only. Replaces the project's allowed connector writes. */
+export function useSetProjectConnectorWrites(project: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (operations: string[]) =>
+      apiRequest<ProjectConnectorWrites>(`/api/playbooks/connector-writes?${projectQuery(project)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operations }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['project-connector-writes', project], data);
+    },
+  });
+}
+
 export interface SkillDraftModel {
   id: string;
   label: string;

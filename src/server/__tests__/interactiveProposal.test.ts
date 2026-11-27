@@ -1,7 +1,6 @@
 import {
   checkInteractiveProposal,
   draftAfterTurn,
-  interactiveProposalMode,
   type InteractiveStepDraft,
 } from '../services/playbookSteps/interactiveProposal';
 
@@ -63,10 +62,6 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
     expect(checkInteractiveProposal({ text: 'Done.', kind: null, outcomes, outcome: 'merge' }).ok).toBe(false);
   });
 
-  it('keeps chatting until a revision is rejected', () => {
-    expect(interactiveProposalMode({ rejectedRevisions: 0 })).toBe('chat');
-  });
-
   it('keeps a failed turn off the turn count and stores the reason', () => {
     const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: null, failedReason: 'denied' });
     expect(next.turnCount).toBe(0);
@@ -74,13 +69,22 @@ describe('interactive proposal rules (FEAT-003 BR-006)', () => {
   });
 
   it('records a valid proposal without completing the step', () => {
-    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'A document.' } });
+    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'A document.\nREADY FOR APPROVAL' } });
     expect(next.turnCount).toBe(1);
     expect(next.proposalOk).toBe(true);
     expect(next.proposalText).toBe('A document.');
   });
 
-  it('allows only approve or cancel after one rejected revision', () => {
-    expect(interactiveProposalMode({ rejectedRevisions: 1 })).toBe('approve-or-cancel');
+  it('keeps a reply with no ready marker as a turn, with nothing to approve', () => {
+    const next = draftAfterTurn({ draft: EMPTY_DRAFT, reply: { text: 'Which release do you mean?' } });
+    expect(next.turnCount).toBe(1);
+    expect(next.proposalOk).toBe(false);
+    expect(next.proposalText).toBeNull();
+  });
+
+  it('a rejected proposal can be answered with more turns: a later marked reply is a new proposal', () => {
+    const rejected = { ...EMPTY_DRAFT, rejectedRevisions: 1 };
+    const next = draftAfterTurn({ draft: rejected, reply: { text: 'Revised.\nREADY FOR APPROVAL' } });
+    expect(next).toMatchObject({ rejectedRevisions: 1, proposalText: 'Revised.', proposalOk: true });
   });
 });

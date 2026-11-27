@@ -3,8 +3,8 @@
  * step is, how long it has run, and what it is doing now or why it failed. Expanded, it shows the
  * step's log and its input and output.
  */
-import React, { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, Clock, Loader2, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp, Clock, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
 import type {
   PlaybookStepRun,
   PlaybookSuspensionDetail,
@@ -15,6 +15,8 @@ import {
   usePlaybookGateDecision,
   usePlaybookStepActivity,
 } from '../hooks/usePlaybookRuns';
+import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
+import { MarkdownWithMermaid } from './MarkdownWithMermaid';
 import { stepStatusLabel } from './playbookStatusFormat';
 import { stepMeta } from './playbookStepCatalog';
 import {
@@ -56,20 +58,33 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   'data-testid': testId = 'playbook-live-step-panel',
 }) => {
   const [tab, setTab] = useState<'log' | 'details'>('log');
+  // A chat keeps the log and the input and output out of the way until the assignee asks for them.
+  const [detailOpen, setDetailOpen] = useState(false);
   const live = LIVE_STATUSES.includes(step.status);
   const now = useNow(live);
   const meta = stepMeta(step.stepType);
   const Icon = meta.icon;
   const isAgent = step.stepType === 'cursor-agent';
   const activity = usePlaybookStepActivity(project, runId, isAgent ? step.id : null, live);
-  const nowDoing = live ? activity.data?.agentRun?.label ?? null : null;
   const failure = stepFailureReason(step);
   const deciding = step.stepType === 'approval-gate'
     && step.status === 'suspended'
     && suspension?.stepId === step.stepId
     && suspension.reason === 'approval_gate';
   const decision = usePlaybookGateDecision(project, runId, step.id);
-  const chatting = step.stepType === 'interactive-agent' && step.status === 'suspended';
+  // An Agent task is one step type; the chat draft on its row marks one that runs an interactive Skill.
+  const chatting = isAgent && isInteractiveTaskDraft(step.outputInline) && step.status === 'suspended';
+  const nowDoing = live && !(chatting && !step.agentRunId) ? activity.data?.agentRun?.label ?? null : null;
+  // A chat needs room for the proposal, the message box and the log, so it opens large.
+  const [maximized, setMaximized] = useState(chatting);
+  // The step runs for a moment before it parks as a chat, so the panel can mount before `chatting`.
+  const wasChatting = useRef(chatting);
+  useEffect(() => {
+    if (chatting && !wasChatting.current) setMaximized(true);
+    wasChatting.current = chatting;
+  }, [chatting]);
+  const large = expanded && maximized;
+  const split = large && (chatting || deciding);
   const [chatMessage, setChatMessage] = useState('');
   const interactiveTurn = useInteractiveAgentTurn(project, runId, step.id);
   const interactiveDecision = useInteractiveAgentDecision(project, runId, step.id);
@@ -80,21 +95,62 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
   const proposalOk = draft?.proposalOk === true;
   const proposalReason = typeof draft?.proposalReason === 'string' ? draft.proposalReason : '';
   const lastTurnError = typeof draft?.lastTurnError === 'string' ? draft.lastTurnError : '';
-  const rejectedRevisions = typeof draft?.rejectedRevisions === 'number' ? draft.rejectedRevisions : 0;
-  const chatClosed = rejectedRevisions >= 1;
+  const turnCount = typeof draft?.turnCount === 'number' ? draft.turnCount : 0;
+  const conversation = chatting ? activity.data?.conversation ?? [] : [];
+  const agentWorking = Boolean(step.agentRunId) || interactiveTurn.isPending;
+  // A finished turn with no proposal is the agent asking or talking, not a result to approve.
+  const asking = chatting && turnCount > 0 && !proposalText && !lastTurnError && !agentWorking;
+  const threadRef = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [conversation.length, agentWorking]);
+
+  const canSend = !interactiveTurn.isPending && Boolean(chatMessage.trim()) && !step.agentRunId;
+  const send = () => {
+    if (!canSend) return;
+    interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
+  };
+  // Rejecting sends the typed text as the feedback for the next turn, so it needs text and a proposal.
+  const canReject = Boolean(proposalText) && Boolean(chatMessage.trim()) && !agentWorking && !interactiveDecision.isPending;
+  const reject = () => {
+    if (!canReject) return;
+    interactiveDecision.mutate({ decision: 'rejected', feedback: chatMessage }, { onSuccess: () => setChatMessage('') });
+  };
 
   useEffect(() => {
     if (!expanded) return undefined;
-    const collapse = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onExpandedChange(false);
+    const shrink = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (maximized) setMaximized(false);
+      else onExpandedChange(false);
     };
-    window.addEventListener('keydown', collapse);
-    return () => window.removeEventListener('keydown', collapse);
-  }, [expanded, onExpandedChange]);
+    window.addEventListener('keydown', shrink);
+    return () => window.removeEventListener('keydown', shrink);
+  }, [expanded, maximized, onExpandedChange]);
+
+  const toggleDetail = (value: 'log' | 'details') => {
+    if (detailOpen && tab === value) {
+      setDetailOpen(false);
+      return;
+    }
+    setTab(value);
+    setDetailOpen(true);
+  };
+
+  const toggleLarge = () => {
+    if (large) {
+      setMaximized(false);
+      return;
+    }
+    setMaximized(true);
+    if (!expanded) onExpandedChange(true);
+  };
 
   return (
     <section
-      className={`${styles.panel} ${expanded ? styles.panelExpanded : ''}`}
+      className={`${styles.panel} ${expanded ? styles.panelExpanded : ''} ${large ? styles.panelMaximized : ''}`}
       data-status={step.status}
       aria-label={`${step.title ?? meta.title} ${step.stepId}`}
       {...{ 'data-testid': testId }}
@@ -143,6 +199,17 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
         <button
           type="button"
           className={styles.close}
+          onClick={toggleLarge}
+          aria-label={large ? 'Make the step panel smaller' : 'Make the step panel fill the page'}
+          title={large ? 'Smaller (Esc)' : 'Fill the page'}
+          aria-pressed={large}
+          {...{ 'data-testid': 'playbook-live-step-panel-maximize' }}
+        >
+          {large ? <Minimize2 size={15} aria-hidden /> : <Maximize2 size={15} aria-hidden />}
+        </button>
+        <button
+          type="button"
+          className={styles.close}
           onClick={onClose}
           aria-label="Close step panel"
           {...{ 'data-testid': 'playbook-live-step-panel-close' }}
@@ -152,133 +219,200 @@ export const PlaybookLiveStepPanel: React.FC<PlaybookLiveStepPanelProps> = ({
       </div>
 
       {expanded ? (
-        <>
-          <div className={styles.tabs} role="tablist" aria-label="Step detail">
-            {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={tab === value}
-                className={`${styles.tab} ${tab === value ? styles.tabActive : ''}`}
-                onClick={() => setTab(value)}
-                {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {chatting ? (
-            <div className={styles.decision} {...{ 'data-testid': 'playbook-interactive-chat' }}>
-              <p className={styles.decisionLead}>
-                Chat with the agent, then approve a result that passes its checks.
-              </p>
-              {proposalText ? <pre className={styles.decisionReport}>{proposalText}</pre> : (
-                <p className={styles.decisionMissing}>No proposal yet. Send a message to start.</p>
-              )}
-              {proposalReason ? <p className={styles.decisionError} role="alert">{proposalReason}</p> : null}
-              {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
-              {chatClosed ? (
-                <p className={styles.decisionMissing}>New messages are closed. Approve the proposal or cancel the run.</p>
-              ) : (
-                <label className={styles.decisionLead}>
-                  Message
-                  <textarea
-                    value={chatMessage}
-                    onChange={(event) => setChatMessage(event.target.value)}
-                    aria-label="Message to the agent"
-                    {...{ 'data-testid': 'playbook-interactive-message' }}
-                  />
-                </label>
-              )}
-              <div className={styles.decisionActions}>
-                {chatClosed ? null : (
-                  <button
-                    type="button"
-                    className={styles.approve}
-                    disabled={interactiveTurn.isPending || !chatMessage.trim() || Boolean(step.agentRunId)}
-                    onClick={() => {
-                      interactiveTurn.mutate(chatMessage, { onSuccess: () => setChatMessage('') });
-                    }}
-                    {...{ 'data-testid': 'playbook-interactive-send' }}
+        <div
+          className={styles.content}
+          data-split={split ? 'true' : undefined}
+          data-chat={chatting ? 'true' : undefined}
+          data-detail={chatting && detailOpen ? 'true' : undefined}
+        >
+          {chatting || deciding ? (
+            <div className={styles.side}>
+              {chatting ? (
+                <div className={styles.decision} {...{ 'data-testid': 'playbook-interactive-chat' }}>
+                  <div className={styles.chatHeader}>
+                    <p className={styles.decisionLead}>
+                      Chat with the agent, then approve a result that passes its checks.
+                    </p>
+                    <div className={styles.detailToggles} role="group" aria-label="Show step detail">
+                      {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={styles.detailToggle}
+                          aria-pressed={detailOpen && tab === value}
+                          onClick={() => toggleDetail(value)}
+                          {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <ol
+                    ref={threadRef}
+                    className={styles.chatThread}
+                    aria-label="Conversation"
+                    {...{ 'data-testid': 'playbook-interactive-conversation' }}
                   >
-                    {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={styles.approve}
-                  disabled={interactiveDecision.isPending || !proposalOk}
-                  onClick={() => interactiveDecision.mutate('approved')}
-                  {...{ 'data-testid': 'playbook-interactive-approve' }}
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className={styles.reject}
-                  disabled={interactiveDecision.isPending || chatClosed || !proposalText}
-                  onClick={() => interactiveDecision.mutate('rejected')}
-                  {...{ 'data-testid': 'playbook-interactive-reject' }}
-                >
-                  Reject proposal
-                </button>
-              </div>
-              {interactiveTurn.isError ? (
-                <p className={styles.decisionError} role="alert">{interactiveTurn.error.message}</p>
+                    {conversation.length === 0 && !agentWorking ? (
+                      <li className={styles.chatEmpty}>No messages yet. The agent starts from the step prompt.</li>
+                    ) : null}
+                    {conversation.map((entry) => (
+                      <li key={entry.id} className={styles.chatMessage} data-role={entry.role}>
+                        <span className={styles.chatAuthor}>{entry.role === 'user' ? 'Assignee' : 'Agent'}</span>
+                        <div className={styles.chatBubble}>
+                          {entry.role === 'agent' ? <MarkdownWithMermaid content={entry.text} /> : entry.text}
+                        </div>
+                      </li>
+                    ))}
+                    {agentWorking ? (
+                      <li className={styles.chatMessage} data-role="agent" aria-label="The agent is working">
+                        <span className={styles.chatAuthor}>Agent</span>
+                        <div className={`${styles.chatBubble} ${styles.chatWorking}`}>
+                          <Loader2 size={13} aria-hidden className={styles.spin} /> Working on a reply…
+                        </div>
+                      </li>
+                    ) : null}
+                  </ol>
+                  {proposalText ? (
+                    <div className={styles.proposal}>
+                      <span className={styles.proposalLabel}>Proposal to approve</span>
+                      <pre className={styles.decisionReport}>{proposalText}</pre>
+                    </div>
+                  ) : null}
+                  {asking ? (
+                    <p className={styles.decisionMissing} role="status" {...{ 'data-testid': 'playbook-interactive-asking' }}>
+                      Agent is asking. Reply in the box below. Approve turns on when the agent sends a result marked ready for approval.
+                    </p>
+                  ) : null}
+                  {proposalText && proposalReason && turnCount > 0 ? (
+                    <p className={styles.decisionError} role="alert">{proposalReason}</p>
+                  ) : null}
+                  {lastTurnError ? <p className={styles.decisionError} role="alert">{lastTurnError}</p> : null}
+                  <label className={styles.decisionLead}>
+                      Message
+                      <textarea
+                        value={chatMessage}
+                        onChange={(event) => setChatMessage(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                            event.preventDefault();
+                            send();
+                          }
+                        }}
+                        placeholder={proposalText ? 'Ctrl+Enter to send. To reject, type what to change, then press Reject.' : 'Ctrl+Enter to send'}
+                        aria-label="Message to the agent"
+                        {...{ 'data-testid': 'playbook-interactive-message' }}
+                      />
+                    </label>
+                  <div className={styles.decisionActions}>
+                    <button
+                      type="button"
+                      className={styles.approve}
+                      disabled={!canSend}
+                      onClick={send}
+                      {...{ 'data-testid': 'playbook-interactive-send' }}
+                    >
+                      {interactiveTurn.isPending || step.agentRunId ? 'Working…' : 'Send'}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.approve}
+                      disabled={interactiveDecision.isPending || !proposalOk}
+                      onClick={() => interactiveDecision.mutate({ decision: 'approved' })}
+                      {...{ 'data-testid': 'playbook-interactive-approve' }}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.reject}
+                      disabled={!canReject}
+                      onClick={reject}
+                      title={proposalText && !chatMessage.trim() ? 'Type what to change first' : undefined}
+                      {...{ 'data-testid': 'playbook-interactive-reject' }}
+                    >
+                      Reject and send feedback
+                    </button>
+                  </div>
+                  {interactiveTurn.isError ? (
+                    <p className={styles.decisionError} role="alert">{interactiveTurn.error.message}</p>
+                  ) : null}
+                  {interactiveDecision.isError ? (
+                    <p className={styles.decisionError} role="alert">{interactiveDecision.error.message}</p>
+                  ) : null}
+                </div>
               ) : null}
-              {interactiveDecision.isError ? (
-                <p className={styles.decisionError} role="alert">{interactiveDecision.error.message}</p>
+              {deciding ? (
+                <div className={styles.decision} {...{ 'data-testid': 'playbook-live-step-decision' }}>
+                  <p className={styles.decisionLead}>
+                    Approve to let the next step run, or reject to stop this run.
+                  </p>
+                  {report ? <pre className={styles.decisionReport}>{report}</pre> : (
+                    <p className={styles.decisionMissing}>
+                      {reportStatus === 'pending'
+                        ? 'Loading the finding…'
+                        : reportStatus === 'unavailable'
+                          ? 'The playbook graph did not load, so the finding cannot be shown yet.'
+                          : 'The agent step did not save a report, so there is nothing here to read. Open the agent step and check its log.'}
+                    </p>
+                  )}
+                  <div className={styles.decisionActions}>
+                    <button
+                      type="button"
+                      className={styles.approve}
+                      disabled={decision.isPending}
+                      onClick={() => decision.mutate({ decision: 'approved' })}
+                      {...{ 'data-testid': 'playbook-live-step-approve' }}
+                    >
+                      {decision.isPending ? 'Saving…' : 'Approve'}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.reject}
+                      disabled={decision.isPending}
+                      onClick={() => decision.mutate({ decision: 'rejected' })}
+                      {...{ 'data-testid': 'playbook-live-step-reject' }}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                  {decision.isError ? (
+                    <p className={styles.decisionError} role="alert">{decision.error.message}</p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : null}
-          {deciding ? (
-            <div className={styles.decision} {...{ 'data-testid': 'playbook-live-step-decision' }}>
-              <p className={styles.decisionLead}>
-                Approve to let the next step run, or reject to stop this run.
-              </p>
-              {report ? <pre className={styles.decisionReport}>{report}</pre> : (
-                <p className={styles.decisionMissing}>
-                  {reportStatus === 'pending'
-                    ? 'Loading the finding…'
-                    : reportStatus === 'unavailable'
-                      ? 'The playbook graph did not load, so the finding cannot be shown yet.'
-                      : 'The agent step did not save a report, so there is nothing here to read. Open the agent step and check its log.'}
-                </p>
+          {!chatting || detailOpen ? (
+            <div className={styles.main}>
+              {chatting ? null : (
+                <div className={styles.tabs} role="tablist" aria-label="Step detail">
+                  {([['log', 'Log'], ['details', 'Input and output']] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={tab === value}
+                      className={`${styles.tab} ${tab === value ? styles.tabActive : ''}`}
+                      onClick={() => setTab(value)}
+                      {...{ 'data-testid': `playbook-live-step-panel-tab-${value}` }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               )}
-              <div className={styles.decisionActions}>
-                <button
-                  type="button"
-                  className={styles.approve}
-                  disabled={decision.isPending}
-                  onClick={() => decision.mutate({ decision: 'approved' })}
-                  {...{ 'data-testid': 'playbook-live-step-approve' }}
-                >
-                  {decision.isPending ? 'Saving…' : 'Approve'}
-                </button>
-                <button
-                  type="button"
-                  className={styles.reject}
-                  disabled={decision.isPending}
-                  onClick={() => decision.mutate({ decision: 'rejected' })}
-                  {...{ 'data-testid': 'playbook-live-step-reject' }}
-                >
-                  Reject
-                </button>
+              <div className={styles.body}>
+                {tab === 'log' ? (
+                  <StepLog key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
+                ) : (
+                  <StepDetails key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
+                )}
               </div>
-              {decision.isError ? (
-                <p className={styles.decisionError} role="alert">{decision.error.message}</p>
-              ) : null}
             </div>
           ) : null}
-          <div className={styles.body}>
-            {tab === 'log' ? (
-              <StepLog key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
-            ) : (
-              <StepDetails key={step.id} project={project} runId={runId} step={step} suspension={suspension} />
-            )}
-          </div>
-        </>
+        </div>
       ) : null}
     </section>
   );

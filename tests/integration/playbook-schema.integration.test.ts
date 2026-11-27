@@ -689,6 +689,9 @@ describe('VT-02 — the playbook migrations roll back cleanly', () => {
     // indexes are named playbook, or the rollback check still finds them. Interview files
     // also have to go first, or playbook_step_runs cannot be dropped.
     for (const file of [
+      '20261127150000_project-playbook-connector-writes.sql',
+      '20261127130000_project-playbook-tools.sql',
+      '20261123110000_playbook-shared-templates.sql',
       '20261120100000_widen-skill-file-names.sql',
       '20261119130000_drop-skill-reference-approval.sql',
       '20261118113000_skill-library-permissions.sql',

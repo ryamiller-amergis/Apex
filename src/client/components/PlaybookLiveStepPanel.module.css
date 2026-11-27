@@ -27,7 +27,260 @@
 .panel[data-status='expired'] { --panel-tint: var(--error-color); }
 
 .panelExpanded {
-  height: min(72%, 40rem);
+  width: min(66rem, calc(100% - 28px));
+  height: min(82%, 48rem);
+}
+
+/* Fills the run graph frame, leaving a margin so the graph edge still shows. */
+.panelMaximized {
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  left: 14px;
+  width: auto;
+  height: auto;
+  max-height: none;
+  transform: none;
+  animation: none;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.side {
+  flex: none;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.content[data-split='true'] {
+  flex-direction: row;
+  border-top: 1px solid var(--border-color);
+}
+
+.content[data-split='true'] .side {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(34rem, 44%);
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+}
+
+.content[data-split='true'] .decision {
+  flex: 1;
+  padding-bottom: 0.9rem;
+}
+
+.content[data-split='true'] .chatThread {
+  flex: 1;
+  min-height: 10rem;
+  max-height: none;
+}
+
+.content[data-split='true'] .decisionReport {
+  max-height: 14rem;
+}
+
+.content[data-split='true'] .decision textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+/* A chat takes the whole panel. The log and the input and output open beside it on request. */
+.content[data-split='true'][data-chat='true'] .side {
+  flex: 1 1 0;
+  min-width: 0;
+  border-right: none;
+  overflow: hidden;
+}
+
+.content[data-split='true'][data-chat='true'][data-detail='true'] .side {
+  border-right: 1px solid var(--border-color);
+}
+
+.content[data-split='true'][data-chat='true'] .main {
+  flex: 0 0 min(36rem, 45%);
+}
+
+.content[data-split='true'][data-chat='true'] .decision {
+  width: 100%;
+  max-width: 60rem;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0.9rem 1.1rem;
+}
+
+.content[data-split='true'][data-chat='true'] .chatThread {
+  min-height: 0;
+  padding: 0.25rem 0.1rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.content[data-split='true'][data-chat='true'] .chatMessage {
+  max-width: 92%;
+}
+
+.content[data-split='true'][data-chat='true'] .chatBubble {
+  font-size: 0.88rem;
+}
+
+.content[data-split='true'][data-chat='true'] .proposal {
+  flex: none;
+}
+
+.content[data-split='true'][data-chat='true'] .decisionReport {
+  max-height: 9rem;
+}
+
+.content[data-split='true'][data-chat='true'] .decision textarea {
+  min-height: 84px;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detailToggles {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.detailToggle {
+  height: 1.8rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detailToggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.detailToggle[aria-pressed='true'] {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.detailToggle:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.chatThread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 14rem;
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  list-style: none;
+  overflow-y: auto;
+}
+
+.chatEmpty {
+  margin: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.chatMessage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 88%;
+}
+
+.chatMessage[data-role='user'] {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chatMessage[data-role='agent'] {
+  align-self: flex-start;
+}
+
+.chatAuthor {
+  font-size: 0.68rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.chatBubble {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chatMessage[data-role='user'] .chatBubble {
+  border-color: color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-primary));
+}
+
+.chatMessage[data-role='agent'] .chatBubble {
+  white-space: normal;
+}
+
+.chatMessage[data-role='agent'] .chatBubble > :first-child {
+  margin-top: 0;
+}
+
+.chatMessage[data-role='agent'] .chatBubble > :last-child {
+  margin-bottom: 0;
+}
+
+.chatWorking {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-muted);
+}
+
+.proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.proposalLabel {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--text-secondary);
 }
 
 .decision {

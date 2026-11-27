@@ -2,7 +2,7 @@
  * Hand-built settings for the step types an author meets most. Each renderer names the config keys
  * it owns; the inspector renders any other schema key with the generic form.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bell,
   BellOff,
@@ -282,11 +282,19 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
   const skills = usePlaybookSkills(project);
   const models = useAvailableModels();
   const skillPath = typeof config.skillPath === 'string' ? config.skillPath.replace(/^[/\\]+/, '') : undefined;
+  // The Skill decides how this task runs. An interactive Skill chats with an assignee and waits
+  // for approval; any other Skill, or none, runs on its own.
+  const interactive = (skills.data?.skills ?? []).some(
+    (skill) => skill.path.replace(/^[/\\]+/, '') === skillPath && skill.skillType === 'interactive',
+  );
   const skillOptions: PlaybookPickerOption[] = (skills.data?.skills ?? []).map((skill) => ({
     value: skill.path,
     label: skillTitle(skill.name),
     description: skill.description,
-    badges: skill.capabilities ?? [],
+    badges: [
+      ...(skill.skillType === 'interactive' ? ['Interactive'] : []),
+      ...(skill.capabilities ?? []),
+    ],
     disabled: !skill.runnable,
     ...(skill.group ? { group: skill.group } : {}),
     ...(skill.unavailableReason ? { disabledReason: skill.unavailableReason } : {}),
@@ -297,9 +305,22 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
     description: model.id,
   }));
   const prompt = typeof config.prompt === 'string' ? config.prompt : '';
+  // Read-only is the only access an agent step has, so the editor no longer asks for it. The server
+  // still wants the profile named on the step, so the editor stores it.
+  const hasProfile = typeof config.mcpProfile === 'string' && config.mcpProfile.length > 0;
+  useEffect(() => {
+    if (!hasProfile && !disabled) setField('mcpProfile', 'repository-read-only');
+  }, [hasProfile, disabled, setField]);
   return (
     <>
-      <Field label="Skill" htmlFor={`${node.id}-skill`} hint="Optional. A procedure the agent follows on top of your prompt." {...{ 'data-testid': `playbook-field-${node.id}-skill` }}>
+      <Field
+        label="Skill"
+        htmlFor={`${node.id}-skill`}
+        hint={interactive
+          ? 'This Skill is interactive. The assignee chats with the agent and approves its result.'
+          : 'Optional. A procedure the agent follows on top of your prompt. An interactive Skill makes this task a chat with a person.'}
+        {...{ 'data-testid': `playbook-field-${node.id}-skill` }}
+      >
         <PlaybookOptionPicker
           id={`${node.id}-skill`}
           value={skillPath}
@@ -356,29 +377,7 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           {...{ 'data-testid': "playbook-inspector-field-model" }}
         />
       </Field>
-      <Field
-        label="Access"
-        htmlFor={`${node.id}-mcp`}
-        required
-        hint="Read-only access lets the agent run before an approval."
-        {...{ 'data-testid': `playbook-field-${node.id}-mcp` }}
-      >
-        <PlaybookOptionPicker
-          id={`${node.id}-mcp`}
-          value={typeof config.mcpProfile === 'string' ? config.mcpProfile : undefined}
-          options={[{
-            value: 'repository-read-only',
-            label: 'Read-only repository',
-            description: 'Reads code and the network. No external writes or deployment.',
-          }]}
-          placeholder="Choose access"
-          icon={<ShieldCheck size={14} />}
-          disabled={disabled}
-          onChange={(value) => setField('mcpProfile', value)}
-          {...{ 'data-testid': "playbook-inspector-field-mcpProfile" }}
-        />
-      </Field>
-      {node.stepType === 'interactive-agent' ? (
+      {interactive ? (
         <Field
           label="Assignee"
           htmlFor={`${node.id}-assignee`}
@@ -389,7 +388,14 @@ const CursorAgentFields: React.FC<PlaybookStepFieldsProps> = (props) => {
           <AssigneePicker {...props} />
         </Field>
       ) : null}
-      <Field label="Deadline" htmlFor={`${node.id}-deadline`} hint="Blank uses the step's default." {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}>
+      <Field
+        label="Deadline"
+        htmlFor={`${node.id}-deadline`}
+        hint={interactive
+          ? 'Blank waits 7 days. From 1 hour to 14 days.'
+          : 'Blank uses 60 minutes. A deadline can only be shorter.'}
+        {...{ 'data-testid': `playbook-field-${node.id}-deadline` }}
+      >
         <DeadlineField
           id={`${node.id}-deadline`}
           value={config.deadlineMs}
@@ -1237,7 +1243,7 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
         label="Integration"
         htmlFor={`${node.id}-integration`}
         required
-        hint="The system this connector names. A run records the choice and does not call the system yet."
+        hint="The system this connector reaches, using this project's access."
         {...{ 'data-testid': `playbook-field-${node.id}-integration` }}
       >
         <PlaybookOptionPicker
@@ -1258,6 +1264,13 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
         label="Action"
         htmlFor={`${node.id}-operation`}
         required
+        hint={
+          operation.recordsOnly
+            ? 'This action records the choice and does not call the system yet.'
+            : operation.access === 'write'
+              ? 'This action changes the system, so an approval gate must come before it.'
+              : `Later steps read the response with \${steps.${node.id}.result}.`
+        }
         {...{ 'data-testid': `playbook-field-${node.id}-operation` }}
       >
         <PlaybookOptionPicker
@@ -1279,6 +1292,7 @@ const ConnectorFields: React.FC<PlaybookStepFieldsProps> = ({
             label={field.label}
             htmlFor={`${node.id}-${field.key}`}
             hint={field.hint}
+            required={field.required}
             {...{ 'data-testid': `playbook-field-${node.id}-${field.key}` }}
           >
             <PlaybookBindingText
@@ -1308,10 +1322,6 @@ export const STEP_FIELD_RENDERERS: Record<string, {
   Component: React.FC<PlaybookStepFieldsProps>;
 }> = {
   'cursor-agent': {
-    handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes'],
-    Component: CursorAgentFields,
-  },
-  'interactive-agent': {
     handledKeys: ['skillPath', 'prompt', 'model', 'mcpProfile', 'deadlineMs', 'threadId', 'outcomes', 'assigneeUserId', 'assigneeEmail'],
     Component: CursorAgentFields,
   },

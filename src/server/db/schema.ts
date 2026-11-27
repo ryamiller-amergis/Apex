@@ -3836,6 +3836,34 @@ export const playbookDefinitionVersions = pgTable('playbook_definition_versions'
   ),
 }));
 
+/**
+ * A Playbook graph a platform admin shared so other projects can install it. A detached snapshot:
+ * the source columns are informational and have no foreign key.
+ */
+export const playbookSharedTemplates = pgTable('playbook_shared_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  summary: text('summary').notNull().default(''),
+  category: text('category').notNull().default('shared'),
+  graph: jsonb('graph').$type<PlaybookGraph>().notNull(),
+  sourceProject: text('source_project').notNull(),
+  sourceDefinitionId: uuid('source_definition_id'),
+  sourceVersionNumber: integer('source_version_number'),
+  createdBy: text('created_by').notNull().references(() => appUsers.oid, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
+}, (t) => ({
+  nameUq: uniqueIndex('uq_playbook_shared_templates_name')
+    .on(sql`lower(btrim(${t.name}))`)
+    .where(sql`${t.archivedAt} IS NULL`),
+  createdIdx: index('idx_playbook_shared_templates_created').on(t.createdAt),
+  nameNotBlank: check(
+    'playbook_shared_templates_name_not_blank',
+    sql`length(btrim(${t.name})) > 0`,
+  ),
+}));
+
 export const playbookVersionLayouts = pgTable('playbook_version_layouts', {
   id: uuid('id').primaryKey().defaultRandom(),
   versionId: uuid('version_id')
@@ -4026,6 +4054,27 @@ export const projectPlaybookSkillFiles = pgTable('project_playbook_skill_files',
   classification: text('classification').$type<'instruction' | 'reference'>().notNull(),
 }, (t) => ({
   versionFileUq: unique('uq_project_playbook_skill_files_name').on(t.versionId, t.fileName),
+}));
+
+/** Tools a project lets its skills name in `playbook-capabilities`. A platform admin sets them. */
+export const projectPlaybookTools = pgTable('project_playbook_tools', {
+  project: text('project').notNull(),
+  tool: text('tool').notNull(),
+  enabledBy: text('enabled_by').notNull(),
+  enabledAt: timestamp('enabled_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.project, t.tool] }),
+}));
+
+/** Connector write operations a project lets its playbooks run. A platform admin sets them. */
+export const projectPlaybookConnectorWrites = pgTable('project_playbook_connector_writes', {
+  project: text('project').notNull(),
+  integration: text('integration').notNull(),
+  operation: text('operation').notNull(),
+  enabledBy: text('enabled_by').notNull(),
+  enabledAt: timestamp('enabled_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.project, t.integration, t.operation] }),
 }));
 
 export const projectPlaybookSkillsRelations = relations(projectPlaybookSkills, ({ many }) => ({

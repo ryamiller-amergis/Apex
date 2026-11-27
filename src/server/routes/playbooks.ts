@@ -9,7 +9,7 @@
  * `requirePermission` resolves the project from `req.body.project`, so the guard is scoped to the
  * project the caller names rather than to the platform.
  */
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, RequestHandler, Response } from 'express';
 import { requireAnyPermission, requirePermission, resolveRequestProject } from '../middleware/rbac';
 import { getUserId } from '../utils/requestUser';
 import { forwardAsyncErrors } from '../utils/forwardAsyncErrors';
@@ -32,6 +32,12 @@ import {
 } from '../services/playbookGuardService';
 import { PlaybookMcpCapabilityError } from '../services/playbookMcpCapabilityService';
 import { PlaybookExecutionCapabilityError } from '../services/playbookExecutionCapabilityService';
+import {
+  PlaybookConnectorWriteError,
+  listAllowedConnectorWrites,
+  setAllowedConnectorWrites,
+} from '../services/playbookConnectorWriteAllowListService';
+import { playbookConnectorWriteOptions } from '../../shared/types/playbookConnectors';
 import { listPlaybookStepPaletteItems } from '../services/playbookStepPaletteService';
 import {
   CLOUD_AGENT_SETUP_REASON,
@@ -47,6 +53,12 @@ import {
   saveProjectPlaybookSkill,
 } from '../services/playbookProjectSkillService';
 import { PlaybookSkillFrontmatterError } from '../services/playbookSkillFrontmatter';
+import {
+  listAllowedPlaybookTools,
+  PlaybookToolAllowListError,
+  setAllowedPlaybookTools,
+} from '../services/playbookToolAllowListService';
+import { PLAYBOOK_SKILL_TOOLS } from '../../shared/constants/playbookSkillTools';
 import {
   extractSkillFileText,
   generateProjectSkillDraft,
@@ -95,10 +107,10 @@ import {
   UnknownPlaybookStepTypeError,
 } from '../services/playbookSteps/registry';
 import {
+  AgentTaskChatError,
   decideInteractiveProposal,
-  InteractiveAgentStepError,
   sendInteractiveTurn,
-} from '../services/playbookSteps/interactiveAgentAdapter';
+} from '../services/playbookSteps/agentTaskChat';
 import { advanceRun } from '../services/playbookAdvanceService';
 import {
   ApprovalMissingDeadlineError,
@@ -142,6 +154,13 @@ import {
   installPlaybookTemplate,
   listPlaybookTemplates,
 } from '../services/playbookTemplateService';
+import {
+  PlaybookSharedTemplateInvalidError,
+  PlaybookSharedTemplateNameTakenError,
+  PlaybookSharedTemplateNotFoundError,
+  archiveSharedTemplate,
+  sharePlaybookAsTemplate,
+} from '../services/playbookSharedTemplateService';
 import {
   getPlaybookStepOutput,
   PlaybookStepOutputNotFoundError,
@@ -223,6 +242,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookBranchConditionError ||
     error instanceof PlaybookMcpCapabilityError ||
     error instanceof PlaybookExecutionCapabilityError ||
+    error instanceof PlaybookConnectorWriteError ||
     error instanceof UnknownPlaybookStepTypeError ||
     error instanceof PlaybookStepSchemaError ||
     error instanceof PlaybookStepTypeError
@@ -234,6 +254,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
   if (
     error instanceof PlaybookInterviewProfilePublishError
     || error instanceof PlaybookTemplateInvalidError
+    || error instanceof PlaybookSharedTemplateInvalidError
     || error instanceof PlaybookTemplateVersionError
     || error instanceof PlaybookTemplateConfirmationRequiredError
   ) {
@@ -250,7 +271,8 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookLifecycleDefinitionNotFoundError ||
     error instanceof PlaybookDraftNotFoundError ||
     error instanceof PlaybookVersionNotFoundError ||
-    error instanceof PlaybookTemplateNotFoundError
+    error instanceof PlaybookTemplateNotFoundError ||
+    error instanceof PlaybookSharedTemplateNotFoundError
   ) {
     res.status(404).json({ error: error.message });
     return true;
@@ -261,6 +283,7 @@ function sendDefinitionError(error: unknown, res: Response): boolean {
     error instanceof PlaybookVersionImmutableError ||
     error instanceof PlaybookVersionTransitionError ||
     error instanceof PlaybookTemplateAlreadyPublishedError ||
+    error instanceof PlaybookSharedTemplateNameTakenError ||
     error instanceof PlaybookDefinitionBusyError ||
     isUniqueViolation(error)
   ) {
@@ -399,8 +422,76 @@ router.post(
         project,
         templateKey: req.params.templateKey,
         createdByUserId: actorUserId,
+        name: typeof (req.body as { name?: unknown } | undefined)?.name === 'string'
+          ? (req.body as { name: string }).name
+          : undefined,
       });
       res.status(installed.created ? 201 : 200).json(installed.detail);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+/** Platform admins are super admins. A shared template reaches every project, so only they may change one. */
+const requirePlatformAdmin: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!isSuperAdminRequest(req)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  next();
+};
+// Sharing is a platform decision: a template reaches every project, so only a platform admin
+// (super admin) may publish or remove one. Installing stays a project author action above.
+router.post(
+  '/definitions/:definitionId/share-as-template',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req)!;
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const body = (req.body ?? {}) as { name?: unknown; summary?: unknown };
+    if (
+      (body.name !== undefined && typeof body.name !== 'string')
+      || (body.summary !== undefined && typeof body.summary !== 'string')
+    ) {
+      res.status(400).json({ error: 'name and summary must be strings' });
+      return;
+    }
+    try {
+      const shared = await sharePlaybookAsTemplate({
+        project,
+        definitionId: req.params.definitionId,
+        actorUserId,
+        name: body.name as string | undefined,
+        summary: body.summary as string | undefined,
+      });
+      res.status(201).json(shared);
+    } catch (error) {
+      if (!sendDefinitionError(error, res)) throw error;
+    }
+  },
+);
+
+router.delete(
+  '/templates/:templateKey',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const actorUserId = getUserId(req);
+    if (!actorUserId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    try {
+      await archiveSharedTemplate(req.params.templateKey, actorUserId);
+      res.status(204).end();
     } catch (error) {
       if (!sendDefinitionError(error, res)) throw error;
     }
@@ -813,6 +904,91 @@ router.get(
       return;
     }
     res.json({ skills: await listProjectSkillLibrary(project) });
+  },
+);
+
+router.get(
+  '/project-skills/tools',
+  requireAnyPermission('skills:view', 'skills:manage'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json({ catalog: PLAYBOOK_SKILL_TOOLS, allowed: await listAllowedPlaybookTools(project) });
+  },
+);
+
+router.get(
+  '/connector-writes',
+  requirePermission('playbooks:view'),
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    res.json({ catalog: playbookConnectorWriteOptions(), allowed: await listAllowedConnectorWrites(project) });
+  },
+);
+
+// Which connector writes a project's playbooks may run is a platform decision.
+router.put(
+  '/connector-writes',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const actorUserId = getUserId(req);
+    const operations = (req.body ?? {}).operations;
+    if (!project || !actorUserId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    if (!Array.isArray(operations) || operations.some((id) => typeof id !== 'string')) {
+      res.status(400).json({ error: 'operations must be a list of operation ids.' });
+      return;
+    }
+    try {
+      res.json({
+        catalog: playbookConnectorWriteOptions(),
+        allowed: await setAllowedConnectorWrites({ project, operations, actorUserId }),
+      });
+    } catch (error) {
+      if (error instanceof PlaybookConnectorWriteError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  },
+);
+
+// Which tools a project's skills may name is a platform decision, like sharing a template.
+router.put(
+  '/project-skills/tools',
+  requirePlatformAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const project = resolveRequestProject(req);
+    const actorUserId = getUserId(req);
+    const tools = (req.body ?? {}).tools;
+    if (!project || !actorUserId) {
+      res.status(400).json({ error: 'project and a signed-in user are required' });
+      return;
+    }
+    if (!Array.isArray(tools) || tools.some((tool) => typeof tool !== 'string')) {
+      res.status(400).json({ error: 'tools must be a list of tool ids.' });
+      return;
+    }
+    try {
+      res.json({ catalog: PLAYBOOK_SKILL_TOOLS, allowed: await setAllowedPlaybookTools({ project, tools, actorUserId }) });
+    } catch (error) {
+      if (error instanceof PlaybookToolAllowListError) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   },
 );
 
@@ -1436,7 +1612,7 @@ router.post(
       });
       res.status(202).json({ ok: true });
     } catch (error) {
-      if (error instanceof InteractiveAgentStepError) {
+      if (error instanceof AgentTaskChatError) {
         res.status(400).json({ error: error.message });
         return;
       }
@@ -1451,6 +1627,7 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     const userId = getUserId(req);
     const decision = (req.body ?? {}).decision;
+    const feedback = (req.body ?? {}).feedback;
     if (!userId) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
@@ -1459,19 +1636,24 @@ router.post(
       res.status(400).json({ error: "decision must be 'approved' or 'rejected'" });
       return;
     }
+    if (feedback !== undefined && typeof feedback !== 'string') {
+      res.status(400).json({ error: 'feedback must be text' });
+      return;
+    }
     try {
       const result = await decideInteractiveProposal({
         runId: req.params.runId,
         stepRunId: req.params.stepRunId,
         userId,
         decision,
+        ...(typeof feedback === 'string' ? { feedback } : {}),
       });
       if (result.outcome === 'recorded' && result.stepId && decision === 'approved') {
         await advanceRun(req.params.runId, result.stepId);
       }
       res.status(200).json(result);
     } catch (error) {
-      if (error instanceof InteractiveAgentStepError) {
+      if (error instanceof AgentTaskChatError) {
         res.status(400).json({ error: error.message });
         return;
       }

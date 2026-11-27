@@ -25,7 +25,8 @@ import { db } from '../db/drizzle';
 import { agentRuns, interviews, playbookRuns, playbookStepRuns } from '../db/schema';
 import { advanceStalledRuns } from './playbookAdvanceService';
 import { cursorAgentCompletionOutput } from './playbookSteps/cursorAgentCompletion';
-import { recordInteractiveTurnFinished, warnInteractiveExpiring } from './playbookSteps/interactiveAgentAdapter';
+import { recordInteractiveTurnFinished, warnInteractiveExpiring } from './playbookSteps/agentTaskChat';
+import { isInteractiveAgentTaskRow } from './playbookSteps/registry';
 import { failStepRun, resumeStepRun } from './playbookSteps/stepRuns';
 import type { PlaybookSweepOutcome } from '../../shared/types/playbook';
 import { failGatesWithEmptyCurrentPools } from './playbookGateService';
@@ -77,6 +78,7 @@ async function resumeMissedTerminalEvents(): Promise<number> {
     .select({
       stepRunId: playbookStepRuns.id,
       stepType: playbookStepRuns.stepType,
+      outputInline: playbookStepRuns.outputInline,
       agentRunStatus: agentRuns.status,
       agentRunId: agentRuns.id,
       threadId: agentRuns.threadId,
@@ -93,7 +95,7 @@ async function resumeMissedTerminalEvents(): Promise<number> {
 
   let moved = 0;
   for (const row of stranded) {
-    if (row.stepType === 'interactive-agent') {
+    if (isInteractiveAgentTaskRow(row.stepType, row.outputInline)) {
       const recorded = await recordInteractiveTurnFinished({
         stepRunId: row.stepRunId,
         agentRunId: row.agentRunId,
@@ -162,10 +164,12 @@ async function expireOverdueSuspensions(now: Date): Promise<number> {
       id: playbookStepRuns.id,
       runId: playbookStepRuns.runId,
       stepType: playbookStepRuns.stepType,
+      outputInline: playbookStepRuns.outputInline,
     });
 
   for (const step of expiredSteps) {
-    if (step.stepType === 'cursor-agent') {
+    // A chat with an assignee has no validation thread to score; only an autonomous task does.
+    if (step.stepType === 'cursor-agent' && !isInteractiveAgentTaskRow(step.stepType, step.outputInline)) {
       await applyExpiredValidationTimeout(step.runId);
     }
     if (step.stepType === 'interview') {

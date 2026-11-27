@@ -78,7 +78,21 @@ describe('describePlaybookSkill', () => {
       capabilities: ['repository-read'],
       runnable: true,
       group: 'base',
+      skillType: null,
     });
+  });
+
+  it('reports the skill type a Skill declares so the builder can tell a chat from an autonomous task', () => {
+    const interactive = describePlaybookSkill(
+      '.cursor/skills/review/SKILL.md',
+      '---\nname: review\ndescription: Reviews.\nmetadata:\n  apex:\n    skill-type: interactive\n---\nBody',
+    );
+    const autonomous = describePlaybookSkill(
+      '.cursor/skills/scan/SKILL.md',
+      '---\nname: scan\ndescription: Scans.\nmetadata:\n  apex:\n    skill-type: autonomous\n---\nBody',
+    );
+    expect(interactive.skillType).toBe('interactive');
+    expect(autonomous.skillType).toBe('autonomous');
   });
 
   it('lists foundation skills and keeps the MaxView investigation Skill out of the base list', async () => {

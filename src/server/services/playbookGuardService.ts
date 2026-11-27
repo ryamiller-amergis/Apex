@@ -38,6 +38,7 @@ import {
   assertCursorAgentsUseReadOnlyMcp,
   isReadOnlyCursorAgentNode,
 } from './playbookMcpCapabilityService';
+import { connectorConfigWrites } from '../../shared/types/playbookConnectors';
 import {
   PLAYBOOK_GUARD_LIMITS,
   playbookStepNeedsTitle,
@@ -431,6 +432,10 @@ function isUngatedLeavesApexNode(
   // A server-verified read-only cursor profile does not leave Apex, despite the conservative
   // descriptor classification used for legacy/unknown agent configurations.
   if (isReadOnlyCursorAgentNode(node)) return false;
+  // A connector is a read by step type. A write operation changes something outside Apex.
+  if (node.stepType === 'connector' && connectorConfigWrites(node.config)) {
+    return exposed.has(node.id);
+  }
   if (lookup(node.stepType)?.sideEffect !== 'leaves-apex') return false;
   return exposed.has(node.id);
 }

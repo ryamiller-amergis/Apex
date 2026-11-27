@@ -3,9 +3,8 @@
  * with Apex and are only picked in the builder, so they are not listed here.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  ArrowLeft,
+  AlertTriangle,
   BookOpen,
   Bot,
   FileText,
@@ -22,7 +21,11 @@ import {
   extractSkillFileText,
   useGenerateProjectSkillDraft,
   useProjectSkillLibrary,
+  useProjectConnectorWrites,
+  useProjectSkillTools,
+  useSetProjectConnectorWrites,
   useSaveProjectSkill,
+  useSetProjectSkillTools,
   useSkillDraftModels,
 } from '../hooks/useProjectSkillLibrary';
 import { DataGridFilterPills, DataGridToolbar } from './DataGridToolbar';
@@ -32,16 +35,15 @@ import styles from './ProjectSkillLibraryPage.module.css';
 import {
   MAX_CONVERTED_FILE_BYTES,
   MAX_SKILL_FILE_BYTES,
-  buildProjectSkillMarkdown,
   decodeSkillFileText,
   filterProjectSkills,
   isConvertedFileName,
   skillFileName,
-  skillInstructions,
   skillNameFromTitle,
   type ProjectSkillLibraryItem,
   type ProjectSkillType,
 } from '../utils/projectSkillLibrary';
+import { blankSkillFile, readSkillFile as readSkillFields, updateSkillFile } from '../utils/skillFile';
 
 type TypeFilter = 'all' | ProjectSkillType;
 
@@ -126,17 +128,14 @@ function useEscape(onClose: () => void) {
 
 interface SkillEditorSeed {
   title: string;
-  description: string;
-  skillType: ProjectSkillType;
-  instructions: string;
+  /** The whole SKILL.md, frontmatter included. */
+  content: string;
   files: AttachedFile[];
 }
 
 const EMPTY_SEED: SkillEditorSeed = {
   title: '',
-  description: '',
-  skillType: 'autonomous',
-  instructions: '',
+  content: blankSkillFile(),
   files: [],
 };
 
@@ -148,10 +147,16 @@ const SkillEditor: React.FC<{
 }> = ({ project, seed, editing, onClose }) => {
   const saveSkill = useSaveProjectSkill(project);
   const generate = useGenerateProjectSkillDraft(project);
+  const tools = useProjectSkillTools(project);
   const [title, setTitle] = useState(seed.title);
-  const [description, setDescription] = useState(seed.description);
-  const [skillType, setSkillType] = useState<ProjectSkillType>(seed.skillType);
-  const [instructions, setInstructions] = useState(seed.instructions);
+  // The file is the one source of truth. Description, type and tools are read from its frontmatter
+  // and written back to it, so what the person sees is what is saved.
+  const [content, setContent] = useState(seed.content);
+  const file = useMemo(() => readSkillFields(content), [content]);
+  const description = file.description;
+  const skillType: ProjectSkillType = file.skillType ?? 'autonomous';
+  const instructions = file.body;
+  const allowedTools = useMemo(() => new Set(tools.data?.allowed ?? []), [tools.data]);
   const [request, setRequest] = useState('');
   const [draftModelId, setDraftModelId] = useState('');
   const draftModels = useSkillDraftModels(project);
@@ -160,6 +165,8 @@ const SkillEditor: React.FC<{
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [readingFiles, setReadingFiles] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Shown inside the Draft with AI panel, next to the button that caused it. */
+  const [aiError, setAiError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const slug = skillNameFromTitle(title);
@@ -170,13 +177,13 @@ const SkillEditor: React.FC<{
   useEscape(onClose);
 
   async function onGenerate() {
-    setError(null);
+    setAiError(null);
     if (!slug) {
-      setError('Give the skill a title before generating a draft.');
+      setAiError('Give the skill a title before generating a draft.');
       return;
     }
     if (!request.trim()) {
-      setError('Say what the skill should do before generating a draft.');
+      setAiError('Say what the skill should do before generating a draft.');
       return;
     }
     try {
@@ -187,13 +194,12 @@ const SkillEditor: React.FC<{
         ...(draftModelId ? { modelId: draftModelId } : {}),
       });
       if (!description.trim() && !instructions.trim()) {
-        setDescription(draft.description);
-        setInstructions(draft.instructions);
+        setContent((current) => updateSkillFile(current, { description: draft.description, body: draft.instructions }));
       } else {
         setPendingDraft(draft);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The draft could not be generated.');
+      setAiError(err instanceof Error ? err.message : 'The draft could not be generated.');
     }
   }
 
@@ -230,10 +236,14 @@ const SkillEditor: React.FC<{
       setError('A description and instructions are required.');
       return;
     }
-    const skill = buildProjectSkillMarkdown({ title, description, skillType, body: instructions });
+    if (!file.skillType) {
+      setError('The skill file needs a type under metadata.apex.skill-type: autonomous or interactive.');
+      return;
+    }
     try {
       await saveSkill.mutateAsync({
-        content: skill.content,
+        // The title decides the name, so the name line always matches the library entry.
+        content: updateSkillFile(content, { name: slug }),
         companions: files.map((file) => ({ ...file, classification: 'reference' as const })),
       });
       onClose();
@@ -278,7 +288,10 @@ const SkillEditor: React.FC<{
             <input
               ref={titleRef}
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setContent((current) => updateSkillFile(current, { name: skillNameFromTitle(event.target.value) }));
+              }}
               placeholder="e.g. Release notes writer"
               readOnly={editing}
               data-testid="skill-library-title"
@@ -296,7 +309,7 @@ const SkillEditor: React.FC<{
                 aria-checked={skillType === value}
                 className={styles.typeChoice}
                 data-active={skillType === value}
-                onClick={() => setSkillType(value)}
+                onClick={() => setContent((current) => updateSkillFile(current, { skillType: value }))}
                 data-testid={`skill-library-type-${value}`}
               >
                 <Icon size={16} aria-hidden />
@@ -356,6 +369,24 @@ const SkillEditor: React.FC<{
                 <span className={styles.aiStatus} role="status">You can keep editing while the draft runs.</span>
               ) : null}
             </div>
+            {aiError ? (
+              <div className={styles.aiError} role="alert" data-testid="skill-library-ai-error">
+                <AlertTriangle size={16} className={styles.aiErrorIcon} aria-hidden />
+                <div className={styles.aiErrorText}>
+                  <strong>Could not draft the skill</strong>
+                  <span>{aiError}</span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.aiErrorDismiss}
+                  onClick={() => setAiError(null)}
+                  aria-label="Dismiss the error"
+                  data-testid="skill-library-ai-error-dismiss"
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              </div>
+            ) : null}
             {pendingDraft ? (
               <div className={styles.draftReady} role="status" data-testid="skill-library-ai-ready">
                 <span>A draft is ready. It will replace the description and instructions below.</span>
@@ -364,8 +395,10 @@ const SkillEditor: React.FC<{
                     type="button"
                     className={pageStyles.primaryButton}
                     onClick={() => {
-                      setDescription(pendingDraft.description);
-                      setInstructions(pendingDraft.instructions);
+                      setContent((current) => updateSkillFile(current, {
+                        description: pendingDraft.description,
+                        body: pendingDraft.instructions,
+                      }));
                       setPendingDraft(null);
                     }}
                     data-testid="skill-library-ai-apply"
@@ -389,21 +422,67 @@ const SkillEditor: React.FC<{
             <span>Description</span>
             <input
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(event) => setContent((current) => updateSkillFile(current, { description: event.target.value }))}
               placeholder="One sentence on what the skill does and when to pick it"
               data-testid="skill-library-description"
             />
           </label>
 
+          {(tools.data?.catalog.length ?? 0) > 0 ? (
+            <fieldset className={styles.tools} data-testid="skill-library-tools">
+              <legend>Tools <em>optional</em></legend>
+              <p className={styles.toolsHint}>
+                Extra tools the agent may use while it works. Choosing one writes{' '}
+                <code>playbook-capabilities</code> in the skill file below. A platform admin decides
+                which tools {project} allows.
+              </p>
+              {tools.data?.catalog.map((tool) => {
+                const checked = file.tools.includes(tool.id);
+                const allowed = allowedTools.has(tool.id);
+                return (
+                  <label
+                    key={tool.id}
+                    className={styles.tool}
+                    data-disabled={!allowed && !checked}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!allowed && !checked}
+                      onChange={(event) => {
+                        const on = event.target.checked;
+                        setContent((current) => {
+                          const now = readSkillFields(current).tools.filter((id) => id !== tool.id);
+                          return updateSkillFile(current, { tools: on ? [...now, tool.id] : now });
+                        });
+                      }}
+                      data-testid={`skill-library-tool-${tool.id}`}
+                    />
+                    <strong>{tool.label}</strong>
+                    <small>
+                      {tool.description}
+                      {!allowed ? ` Not enabled for ${project}.` : ''}
+                    </small>
+                  </label>
+                );
+              })}
+            </fieldset>
+          ) : null}
+
           <label className={pageStyles.formField}>
-            <span>Instructions</span>
+            <span>Skill file</span>
             <textarea
               className={styles.instructions}
-              value={instructions}
-              onChange={(event) => setInstructions(event.target.value)}
-              placeholder="The steps the agent follows, in Markdown."
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              spellCheck={false}
+              placeholder="The whole SKILL.md."
               data-testid="skill-library-body"
             />
+            <em>
+              The whole SKILL.md: the frontmatter between the dashes, then the instructions in
+              Markdown. The fields above edit the frontmatter for you.
+            </em>
           </label>
 
           <div className={styles.filesField}>
@@ -539,8 +618,8 @@ const SkillVersions: React.FC<{
                 </span>
               </div>
               <details className={styles.versionDetails} open={index === 0}>
-                <summary>Instructions</summary>
-                <pre className={styles.fileBody}>{skillInstructions(version.content)}</pre>
+                <summary>Skill file</summary>
+                <pre className={styles.fileBody}>{version.content}</pre>
               </details>
               {version.files.map((file) => (
                 <details key={file.id} className={styles.versionDetails}>
@@ -567,6 +646,87 @@ const SkillVersions: React.FC<{
         ) : null}
       </div>
     </div>
+  );
+};
+
+// ── Tool allow-list (platform admin) ─────────────────────────────────────────
+
+const ToolAllowList: React.FC<{ project: string }> = ({ project }) => {
+  const tools = useProjectSkillTools(project);
+  const setTools = useSetProjectSkillTools(project);
+  const catalog = tools.data?.catalog ?? [];
+  if (catalog.length === 0) return null;
+  const allowed = tools.data?.allowed ?? [];
+  return (
+    <section className={styles.allowList} aria-labelledby="skill-tools-title" data-testid="skill-library-tool-allow-list">
+      <h2 id="skill-tools-title" className={styles.allowTitle}>Tools {project} allows</h2>
+      <p className={styles.toolsHint}>
+        A skill in this project may name only these tools. Turning one off stops new skill versions
+        from using it. Versions already saved keep it.
+      </p>
+      {catalog.map((tool) => (
+        <label key={tool.id} className={styles.tool}>
+          <input
+            type="checkbox"
+            checked={allowed.includes(tool.id)}
+            disabled={setTools.isPending}
+            onChange={(event) => {
+              const rest = allowed.filter((id) => id !== tool.id);
+              setTools.mutate(event.target.checked ? [...rest, tool.id] : rest);
+            }}
+            data-testid={`skill-library-allow-${tool.id}`}
+          />
+          <strong>{tool.label}</strong>
+          <small>{tool.description}</small>
+        </label>
+      ))}
+      {setTools.isError ? (
+        <p className={pageStyles.formError} role="alert">{setTools.error.message}</p>
+      ) : null}
+    </section>
+  );
+};
+
+// ── Connector write allow-list (platform admin) ──────────────────────────────
+
+const ConnectorWriteAllowList: React.FC<{ project: string }> = ({ project }) => {
+  const writes = useProjectConnectorWrites(project);
+  const setWrites = useSetProjectConnectorWrites(project);
+  const catalog = writes.data?.catalog ?? [];
+  if (catalog.length === 0) return null;
+  const allowed = writes.data?.allowed ?? [];
+  return (
+    <section
+      className={styles.allowList}
+      aria-labelledby="connector-writes-title"
+      data-testid="skill-library-connector-write-allow-list"
+    >
+      <h2 id="connector-writes-title" className={styles.allowTitle}>Connector writes {project} allows</h2>
+      <p className={styles.toolsHint}>
+        A playbook in this project can publish and run only these connector actions that change
+        something outside Apex. An approval gate must also come before each one. Turning one off
+        stops published playbooks from running it.
+      </p>
+      {catalog.map((option) => (
+        <label key={option.id} className={styles.tool}>
+          <input
+            type="checkbox"
+            checked={allowed.includes(option.id)}
+            disabled={setWrites.isPending}
+            onChange={(event) => {
+              const rest = allowed.filter((id) => id !== option.id);
+              setWrites.mutate(event.target.checked ? [...rest, option.id] : rest);
+            }}
+            data-testid={`skill-library-allow-write-${option.id}`}
+          />
+          <strong>{option.integrationLabel} · {option.label}</strong>
+          <small>{option.description}</small>
+        </label>
+      ))}
+      {setWrites.isError ? (
+        <p className={pageStyles.formError} role="alert">{setWrites.error.message}</p>
+      ) : null}
+    </section>
   );
 };
 
@@ -617,15 +777,13 @@ function seedFromSkill(skill: ProjectSkillLibraryItem): SkillEditorSeed {
   const latest = skill.versions[0];
   return {
     title: skill.name,
-    description: skill.description,
-    skillType: latest?.skillType === 'interactive' ? 'interactive' : 'autonomous',
-    instructions: latest ? skillInstructions(latest.content) : '',
+    content: latest?.content ?? updateSkillFile(blankSkillFile(), { name: skill.name }),
     files: (latest?.files ?? []).map((file) => ({ path: file.fileName, content: file.content })),
   };
 }
 
 const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => {
-  const { can } = useAppShell();
+  const { can, isSuperAdmin } = useAppShell();
   const canView = can('skills:view') || can('skills:manage');
   const canManage = can('skills:manage');
   const library = useProjectSkillLibrary(project);
@@ -670,10 +828,6 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
 
   return (
     <div className={pageStyles.page} data-testid="project-skill-library">
-      <Link to="/playbooks" className={styles.crumb} data-testid="skill-library-back">
-        <ArrowLeft size={14} aria-hidden /> Playbooks
-      </Link>
-
       <header className={pageStyles.hero}>
         <div className={pageStyles.heroText}>
           <h1 className={pageStyles.title}>Skill library</h1>
@@ -702,6 +856,9 @@ const ProjectSkillLibraryPage: React.FC<{ project: string }> = ({ project }) => 
           <span>on the latest versions</span>
         </div>
       </dl>
+
+      {isSuperAdmin ? <ToolAllowList project={project} /> : null}
+      {isSuperAdmin ? <ConnectorWriteAllowList project={project} /> : null}
 
       <DataGridToolbar
         searchValue={search}

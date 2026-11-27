@@ -62,7 +62,6 @@ export const DEFAULT_POPULAR_STEP_TYPES: readonly string[] = ['cursor-agent', 'a
 /** Placeholder text for a step's Title field. */
 export const STEP_TITLE_EXAMPLES: Record<string, string> = {
   'cursor-agent': 'Investigate the production error',
-  'interactive-agent': 'Review the incident with the on-call engineer',
   'cloud-agent': 'Fix the bug and open a pull request',
   'approval-gate': 'Approve the proposed fix',
   'apex-action': 'Comment on the work item',
@@ -77,15 +76,9 @@ export const SUPERSEDED_OUTPUT_FIELDS: Record<string, readonly string[]> = {
 const KNOWN_STEPS: Record<string, Omit<PlaybookStepMeta, 'stepType'>> = {
   'cursor-agent': {
     title: 'Agent task',
-    description: 'Run a Skill with a Cursor agent and wait for its report.',
+    description: 'Run a Skill with a Cursor agent. An interactive Skill chats with a person first.',
     group: 'AI',
     icon: Bot,
-  },
-  'interactive-agent': {
-    title: 'Interactive agent',
-    description: 'Chat with an agent in the run, then approve its result.',
-    group: 'AI',
-    icon: MessagesSquare,
   },
   'cloud-agent': {
     title: 'Cloud agent',

@@ -1,7 +1,8 @@
 /**
- * Rules for an `interactive-agent` step's proposal (FEAT-003, BR-006).
+ * Rules for the proposal of an Agent task whose Skill is interactive (FEAT-003, BR-006).
  *
- * A proposal is the agent's latest answer on the step's thread. The assignee may approve it only
+ * A proposal is the agent's latest answer on the step's thread, and only when that answer ends with
+ * the `READY FOR APPROVAL` line (see proposalMarker.ts). The assignee may approve it only
  * when it passes the loose result check and the skill's output kind check. Both are pure functions
  * here so the approval route and the tests read the same rule.
  *
@@ -10,8 +11,10 @@
  * - `scorecard@1` and `decision@1`: non-empty text whose last fenced ```json block parses to an object.
  * A skill with no kind keeps only the loose check.
  */
+import { isInteractiveTaskDraft } from '../../../shared/utils/playbookAgentTask';
+import { splitProposalMarker } from './proposalMarker';
 
-/** What a suspended interactive step remembers between turns. */
+/** What a suspended interactive Agent task remembers between turns. */
 export interface InteractiveStepDraft {
   threadId: string;
   assigneeUserId: string;
@@ -27,9 +30,7 @@ export interface InteractiveStepDraft {
 }
 
 export function isInteractiveStepDraft(value: unknown): value is InteractiveStepDraft {
-  if (!value || typeof value !== 'object') return false;
-  const draft = value as Partial<InteractiveStepDraft>;
-  return typeof draft.threadId === 'string' && typeof draft.assigneeUserId === 'string';
+  return isInteractiveTaskDraft(value);
 }
 
 /** A finished turn updates the draft and leaves the step suspended. A failed turn does not count. */
@@ -41,7 +42,20 @@ export function draftAfterTurn(input: {
   if (input.failedReason) {
     return { ...input.draft, lastTurnError: input.failedReason };
   }
-  const text = input.reply?.text ?? '';
+  // Only a reply that ends with the marker line is a proposal. Any other reply is the agent asking
+  // or talking, so there is nothing to approve until a later turn carries the marker.
+  const { marked, text } = splitProposalMarker(input.reply?.text ?? '');
+  if (!marked) {
+    return {
+      ...input.draft,
+      turnCount: input.draft.turnCount + 1,
+      proposalText: null,
+      proposalOutcome: null,
+      proposalOk: false,
+      proposalReason: null,
+      lastTurnError: null,
+    };
+  }
   const outcome = input.reply?.outcome;
   const check = checkInteractiveProposal({
     text,
@@ -60,11 +74,6 @@ export function draftAfterTurn(input: {
   };
 }
 
-/** Rejected revisions before the assignee can only approve or cancel. */
-export const INTERACTIVE_REJECTED_REVISION_LIMIT = 1;
-
-export type InteractiveProposalMode = 'chat' | 'approve-or-cancel';
-
 export type InteractiveProposalCheck = { ok: true } | { ok: false; reason: string };
 
 const JSON_KIND_OUTPUT = new Set(['scorecard@1', 'decision@1']);
@@ -73,19 +82,6 @@ const JSON_KIND_OUTPUT = new Set(['scorecard@1', 'decision@1']);
 function lastJsonBlock(text: string): string | null {
   const blocks = [...text.matchAll(/```json\s*\n([\s\S]*?)\n```/g)];
   return blocks.length > 0 ? blocks[blocks.length - 1][1] : null;
-}
-
-/**
- * What the assignee may do next.
- *
- * After a rejected revision the chat closes: the assignee can only approve the proposal or cancel
- * the run. Turns are not capped; the step deadline ends an abandoned chat.
- */
-export function interactiveProposalMode(input: {
-  rejectedRevisions: number;
-}): InteractiveProposalMode {
-  if (input.rejectedRevisions >= INTERACTIVE_REJECTED_REVISION_LIMIT) return 'approve-or-cancel';
-  return 'chat';
 }
 
 /**

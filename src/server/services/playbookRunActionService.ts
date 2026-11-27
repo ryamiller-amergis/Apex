@@ -5,7 +5,7 @@ import {
   playbookRuns,
   playbookStepRuns,
 } from '../db/schema';
-import { closeInteractiveThreads } from './playbookSteps/interactiveAgentAdapter';
+import { closeInteractiveThreads } from './playbookSteps/agentTaskChat';
 import { getUserPermissions } from './rbacService';
 import * as playbookEngine from './playbookEngine';
 import type {
@@ -43,6 +43,8 @@ interface ActionStep {
   stepType: string;
   status: string;
   resumeToken: string | null;
+  /** An interactive Agent task keeps its chat draft here; the cancel path reads it. */
+  outputInline?: unknown;
 }
 
 interface ActionContext {

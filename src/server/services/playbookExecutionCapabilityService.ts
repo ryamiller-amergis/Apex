@@ -6,6 +6,7 @@ import {
   type PlaybookAgentRunPolicy,
   type PlaybookCapability,
 } from '../../shared/types/playbookExecutionCapability';
+import { PLAYBOOK_SKILL_TOOL_IDS } from '../../shared/constants/playbookSkillTools';
 import type { SkillProvider } from '../../shared/types/projectSettings';
 import type { PlaybookGraph } from '../../shared/types/playbook';
 import {
@@ -13,6 +14,8 @@ import {
   resolvePlaybookMcpCapability,
 } from './playbookMcpCapabilityService';
 import { bundleHashV1, type SkillBundleCompanion } from './playbookSkillBundle';
+import type { AgentTaskMode } from '../../shared/utils/playbookAgentTask';
+import { agentTaskModeOfSkill } from './playbookAgentTaskMode';
 import {
   loadStoredProjectSkill,
   projectSkillVersionIdFromPath,
@@ -192,9 +195,12 @@ export function resolvePlaybookAgentRunPolicy(
   }
   const declared = parsePlaybookSkillCapabilities(input.skillContent);
   const requested: PlaybookCapability[] = ['repository-read', 'network-read'];
-  // A Skill that names azure-cli is allowed to run Azure CLI in the worker shell.
-  // The shell stays closed for every other Skill, including one with no capability list.
-  if (declared?.includes('azure-cli')) requested.push('azure-cli');
+  // A Skill gets a tool only when the tool catalog lists it and the Skill names it (azure-cli runs
+  // Azure CLI in the worker shell). A capability outside the catalog, such as external-write, is
+  // never granted from a Skill. The shell stays closed for a Skill with no capability list.
+  for (const tool of PLAYBOOK_SKILL_TOOL_IDS) {
+    if (declared?.includes(tool)) requested.push(tool);
+  }
 
   const provider =
     input.provider === 'ado'
@@ -248,11 +254,11 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
   repository?: string;
   provider?: SkillProvider;
   enforce: boolean;
-}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }>> {
-  const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy }> = [];
+}): Promise<Array<{ nodeId: string; policy: PlaybookAgentRunPolicy; mode: AgentTaskMode }>> {
+  const policies: Array<{ nodeId: string; policy: PlaybookAgentRunPolicy; mode: AgentTaskMode }> = [];
   for (const node of input.graph.nodes) {
     // Cloud-agent steps count toward the agent cap, but they do not load a repository Skill.
-    if (node.stepType !== 'cursor-agent' && node.stepType !== 'interactive-agent') continue;
+    if (node.stepType !== 'cursor-agent') continue;
     const skillPath = playbookSkillPath(
       typeof node.config?.skillPath === 'string' ? node.config.skillPath : undefined,
     );
@@ -261,6 +267,7 @@ export async function resolvePlaybookGraphAgentPolicies(input: {
     const skillContent = stored?.content ?? await loadPlaybookSkillContent(skillPath);
     policies.push({
       nodeId: node.id,
+      mode: agentTaskModeOfSkill(skillContent),
       policy: resolvePlaybookAgentRunPolicy({
         nodeId: node.id,
         skillPath,

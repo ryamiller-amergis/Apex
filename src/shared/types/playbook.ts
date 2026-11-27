@@ -210,6 +210,11 @@ export interface PlaybookSkillOption {
   runnable: boolean;
   /** Base skills are shared files. Project skills belong to one project. */
   group?: 'base' | 'project';
+  /**
+   * What the skill's own frontmatter declares. An interactive skill makes an Agent task chat with
+   * its assignee; anything else (including no declaration) runs on its own.
+   */
+  skillType?: 'autonomous' | 'interactive' | null;
   unavailableReason?: string;
 }
 
@@ -355,6 +360,16 @@ export interface PlaybookStepActivity {
     lastError: string | null;
   } | null;
   entries: PlaybookStepActivityEntry[];
+  /** The chat between the assignee and the agent. Set only for an interactive Agent task. */
+  conversation?: PlaybookStepChatMessage[];
+}
+
+/** One message in an interactive Agent task's chat, oldest first. */
+export interface PlaybookStepChatMessage {
+  id: string;
+  role: 'user' | 'agent';
+  text: string;
+  at: string;
 }
 
 export interface PlaybookStepBlobRef {
@@ -538,10 +553,16 @@ export interface CursorAgentStepConfig {
   model?: string;
   /** Server-owned capability profile; only profiles resolved as read-only may be published. */
   mcpProfile?: string;
-  /** A definition may shorten the derived 60-minute ceiling for this step. */
+  /**
+   * A definition may shorten the 60-minute ceiling of an autonomous task. A task whose Skill is
+   * interactive waits for a person, so it takes 1 hour to 14 days (7 days by default).
+   */
   deadlineMs?: number;
   /** Existing validation thread to enqueue onto instead of creating one. */
   threadId?: string;
+  /** Required when the Skill is interactive: the person who chats with the agent and approves. */
+  assigneeUserId?: string;
+  assigneeEmail?: string;
 }
 
 export interface CloudAgentStepConfig {

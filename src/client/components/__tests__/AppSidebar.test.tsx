@@ -359,6 +359,58 @@ describe('AppSidebar — Playbooks visibility', () => {
   });
 });
 
+describe('AppSidebar — Skill Library visibility', () => {
+  it('renders Skill Library as its own module for a user with skills:view', () => {
+    const onNavigateSkillLibrary = jest.fn();
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key: string) => key === 'skills:view'}
+        menuEnabledViews={['playbooks']}
+        onNavigateSkillLibrary={onNavigateSkillLibrary}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Skill Library' }));
+    expect(onNavigateSkillLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Skill Library for a user who can only manage skills', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key: string) => key === 'skills:manage'}
+        menuEnabledViews={['playbooks']}
+        onNavigateSkillLibrary={jest.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Skill Library' })).toBeInTheDocument();
+  });
+
+  it('hides Skill Library without a skills permission', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key: string) => key === 'playbooks:view'}
+        menuEnabledViews={['playbooks']}
+        onNavigateSkillLibrary={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Skill Library' })).not.toBeInTheDocument();
+  });
+
+  it('hides Skill Library when the project menu omits Playbooks', () => {
+    render(
+      <AppSidebar
+        {...baseProps}
+        can={(key: string) => key === 'skills:view'}
+        menuEnabledViews={[]}
+        onNavigateSkillLibrary={jest.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Skill Library' })).not.toBeInTheDocument();
+  });
+});
+
 describe('AppSidebar — Builds visibility (FEAT-002 VT-06)', () => {
   const canView = (key: string) => key === 'builds:view';
 

@@ -11,12 +11,16 @@ import type {
   PlaybookStepActivity,
   PlaybookStepActivityEntry,
 } from '../../shared/types/playbook';
+import { isInteractiveTaskDraft } from '../../shared/utils/playbookAgentTask';
 import { getThread } from './chatAgentService';
 import { getRun } from './playbookRunProjectionService';
+import { threadConversation } from './playbookSteps/agentTaskConversation';
 
 const MAX_ENTRIES = 300;
 /** Streamed replies arrive a few words per event, so read far more rows than entries shown. */
 const MAX_EVENT_ROWS = 3000;
+/** Turns of an interactive Agent task whose logs the panel shows. */
+const MAX_TURN_LOGS = 20;
 const MAX_DETAIL_CHARS = 1200;
 const MAX_STREAM_CHARS = 12000;
 
@@ -138,6 +142,8 @@ export function threadActivityEntries(messages: readonly ChatMessage[]): Playboo
   return entries.slice(-MAX_ENTRIES);
 }
 
+export { threadConversation };
+
 export function mergeActivityEntries(
   threadEntries: readonly PlaybookStepActivityEntry[],
   runEntries: readonly PlaybookStepActivityEntry[],
@@ -151,6 +157,35 @@ export function mergeActivityEntries(
     })
     .sort((left, right) => left.at.localeCompare(right.at))
     .slice(-MAX_ENTRIES);
+}
+
+/** The log lines one agent run recorded. Each run is read on its own so a reply never joins another's. */
+async function runEventEntries(runId: string): Promise<PlaybookStepActivityEntry[]> {
+  // Newest first, then restored to run order. Reading the oldest rows instead would
+  // freeze the log on the first MAX_ENTRIES events of a long run.
+  const newestFirst = await db
+    .select({
+      eventId: agentRunEvents.eventId,
+      detail: agentRunEvents.detail,
+      event: agentRunEvents.event,
+      at: agentRunEvents.eventTimestamp,
+    })
+    .from(agentRunEvents)
+    .where(eq(agentRunEvents.runId, runId))
+    .orderBy(desc(agentRunEvents.sequence))
+    .limit(MAX_EVENT_ROWS);
+  return runEventActivityEntries(newestFirst.reverse());
+}
+
+/** Every turn that ran on a chat thread, oldest first. The latest few are enough for a log. */
+async function turnRunIdsOnThread(threadId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: agentRuns.id })
+    .from(agentRuns)
+    .where(eq(agentRuns.threadId, threadId))
+    .orderBy(desc(agentRuns.queuedAt))
+    .limit(MAX_TURN_LOGS);
+  return rows.map((row) => row.id).reverse();
 }
 
 export async function getPlaybookStepActivity(input: {
@@ -168,7 +203,26 @@ export async function getPlaybookStepActivity(input: {
     agentRun: null,
     entries: [],
   };
-  if (step.stepType !== 'cursor-agent' || !step.agentRunId) return activity;
+  if (step.stepType !== 'cursor-agent') return activity;
+
+  // An interactive Agent task keeps one thread across turns and clears agentRunId between them,
+  // so its chat and its log come from the thread and from every turn that ran on it.
+  const chatThreadId = isInteractiveTaskDraft(step.outputInline) ? step.outputInline.threadId : null;
+  const chatThread = chatThreadId ? await getThread(chatThreadId) : null;
+  if (chatThreadId) {
+    activity.conversation = threadConversation(chatThread?.messages ?? []);
+  }
+  const turnRunIds = chatThreadId ? await turnRunIdsOnThread(chatThreadId) : [];
+  if (!step.agentRunId) {
+    if (chatThread) {
+      activity.entries = mergeActivityEntries(
+        threadActivityEntries(chatThread.messages),
+        (await Promise.all(turnRunIds.map(runEventEntries))).flat(),
+      );
+    }
+    return activity;
+  }
+  if (!turnRunIds.includes(step.agentRunId)) turnRunIds.push(step.agentRunId);
 
   const [agentRun] = await db.select({
     status: agentRuns.status,
@@ -191,26 +245,17 @@ export async function getPlaybookStepActivity(input: {
     progressAt: agentRun.progressAt ?? null,
     lastError: agentRun.lastError ?? null,
   };
-  const thread = await getThread(agentRun.threadId);
+  const thread = chatThread && agentRun.threadId === chatThreadId
+    ? chatThread
+    : await getThread(agentRun.threadId);
   const fromThread = threadActivityEntries(thread?.messages ?? []);
-  // Newest first, then restored to run order. Reading the oldest rows instead would
-  // freeze the log on the first MAX_ENTRIES events of a long run.
-  const newestFirst = await db
-    .select({
-      eventId: agentRunEvents.eventId,
-      detail: agentRunEvents.detail,
-      event: agentRunEvents.event,
-      at: agentRunEvents.eventTimestamp,
-    })
-    .from(agentRunEvents)
-    .where(eq(agentRunEvents.runId, step.agentRunId))
-    .orderBy(desc(agentRunEvents.sequence))
-    .limit(MAX_EVENT_ROWS);
-  const events = newestFirst.reverse();
   // A V2 worker records its detailed progress in agent_run_events while the thread
   // may contain only the prompt. Returning both prevents that prompt from hiding
   // the live tool, thinking, and response log.
-  activity.entries = mergeActivityEntries(fromThread, runEventActivityEntries(events));
+  const fromRuns = (await Promise.all(
+    (turnRunIds.length > 0 ? turnRunIds : [step.agentRunId]).map(runEventEntries),
+  )).flat();
+  activity.entries = mergeActivityEntries(fromThread, fromRuns);
   if (agentRun.lastError) {
     activity.entries.push({
       id: `${step.agentRunId}-error`,

@@ -1,5 +1,9 @@
 /**
- * The `cursor-agent` step type.
+ * The `cursor-agent` step type (the Agent task).
+ *
+ * This file is the autonomous mode. When the pinned Skill declares `skill-type: interactive`,
+ * `executeCursorAgentStep` hands the step to `agentTaskChat.ts` instead, which chats with an
+ * assignee and resumes on approval. Everything below describes the autonomous mode.
  *
  * Its one hard rule is negative: it must never await the agent run's completion. A process-resident
  * waiter is precisely what the engine was adopted to eliminate, so the adapter enqueues, records the
@@ -38,6 +42,8 @@ import {
   loadStoredProjectSkill,
   projectSkillVersionIdFromPath,
 } from '../playbookProjectSkillService';
+import { agentTaskModeOfSkill } from '../playbookAgentTaskMode';
+import { startAgentTaskChat } from './agentTaskChat';
 import { parseStepInput } from './descriptorValidation';
 import { promptWithOutcomes } from './agentOutcome';
 import { assertSkillAllowed, resolveDeadlineMs } from './registry';
@@ -182,12 +188,6 @@ export async function executeCursorAgentStep(
     throw new PlaybookMcpCapabilityError(context.stepId, config.mcpProfile, mcpCapability.mode);
   }
 
-  const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
-  const agentTimeoutAt = deadlineFromNow(
-    Math.max(1, deadlineMs - Math.min(TERMINAL_EVENT_GRACE_MS, deadlineMs / 2))
-  );
-  const stepExpiresAt = deadlineFromNow(deadlineMs);
-
   const skillConfig = await getSkillConfig(context.project);
   const versionId = projectSkillVersionIdFromPath(skillPath);
   const stored = versionId ? await loadStoredProjectSkill(versionId) : null;
@@ -228,7 +228,27 @@ export async function executeCursorAgentStep(
   const policy = frozenPolicy
     ? { ...frozenPolicy, enforcement: 'enforce' as const }
     : resolvedPolicy;
+
+  // The Skill decides how an Agent task runs. An interactive Skill opens a chat with the assignee
+  // and waits for approval; any other Skill, or none, runs the agent on its own below. Each chat
+  // turn adds the outcome instruction itself, so the opening context carries the bare prompt.
+  if (agentTaskModeOfSkill(skillContent) === 'interactive') {
+    return startAgentTaskChat({
+      context,
+      config,
+      skillContent,
+      skillConfig,
+      prompt: await withWorkItemSection(config.prompt, context),
+    });
+  }
+
   const prompt = await withWorkItemSection(stepPrompt, context);
+
+  const deadlineMs = resolveDeadlineMs(STEP_TYPE, config.deadlineMs);
+  const agentTimeoutAt = deadlineFromNow(
+    Math.max(1, deadlineMs - Math.min(TERMINAL_EVENT_GRACE_MS, deadlineMs / 2))
+  );
+  const stepExpiresAt = deadlineFromNow(deadlineMs);
 
   // The SDK rejects a blank model id outright, so a step in a project with no configured default
   // cannot fall through to the empty string. This is the resolution the interactive lane already

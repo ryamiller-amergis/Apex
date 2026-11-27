@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { ErrorBoundary } from 'react-error-boundary';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -209,7 +209,7 @@ function App() {
   }, []);
   const { data: activeThread = null, isFetching: isFetchingActiveThread } = useChatThread(activeThreadId);
 
-  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
+  type CurrentView = 'project-selector' | 'platform-admin' | 'home' | 'calendar' | 'planning' | 'cloudcost' | 'backlog' | 'adr' | 'notifications' | 'profile' | 'admin' | 'my-work' | 'standup' | 'standup-manage' | 'standup-summary' | 'feature-requests' | 'ui-lab' | 'qa-lab' | 'ai-cost' | 'design-module' | 'playbooks' | 'skill-library' | 'load-tests' | 'diagrams' | 'work-board' | 'builds' | 'mcp-servers' | 'brainstorm' | 'prod-support' | 'not-found';
   const currentView: CurrentView =
     location.pathname === '/'
       ? 'project-selector'
@@ -251,6 +251,8 @@ function App() {
                     ? 'ai-cost'
                     : location.pathname === '/design-module'
                     ? 'design-module'
+                    : location.pathname === '/skill-library'
+                    ? 'skill-library'
                     : location.pathname === '/playbooks' || location.pathname.startsWith('/playbooks/')
                     ? 'playbooks'
                     : location.pathname.startsWith('/work-board')
@@ -437,6 +439,10 @@ function App() {
     menuConfigReady &&
     effectiveEnabledViews.includes('playbooks') &&
     can('playbooks:view');
+  const canAccessSkillLibrary =
+    menuConfigReady &&
+    effectiveEnabledViews.includes('playbooks') &&
+    (can('skills:view') || can('skills:manage'));
   const canAccessMcpServers =
     mcpServersEnabled &&
     menuConfigReady &&
@@ -1023,7 +1029,7 @@ function App() {
     );
   }
 
-  if (currentView === 'playbooks' && (homeFlagsLoading || !menuConfigReady)) {
+  if ((currentView === 'playbooks' || currentView === 'skill-library') && (homeFlagsLoading || !menuConfigReady)) {
     return <ViewSkeleton />;
   }
 
@@ -1039,7 +1045,7 @@ function App() {
     return <ViewSkeleton />;
   }
 
-  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
+  if (currentView === 'not-found' || (currentView === 'playbooks' && !canAccessPlaybooks) || (currentView === 'skill-library' && !canAccessSkillLibrary) || (currentView === 'mcp-servers' && !canAccessMcpServers) || (currentView === 'brainstorm' && !canAccessBrainstorm) || (currentView === 'prod-support' && !canAccessReportIssue)) {
     return (
       <ErrorBoundary FallbackComponent={ViewErrorFallback}>
         <div role="status" aria-live="polite" {...{ 'data-testid': 'route-not-found' }}>
@@ -1085,6 +1091,7 @@ function App() {
             onNavigateLoadTests={() => navigateAwayFromHome('/load-tests')}
             onNavigateDiagrams={() => navigateAwayFromHome('/diagrams')}
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateSkillLibrary={() => navigateAwayFromHome('/skill-library')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
@@ -1149,6 +1156,7 @@ function App() {
             onNavigateWorkBoard={() => navigateAwayFromHome('/work-board')}
             workBoardEnabled={workBoardEnabled}
             onNavigatePlaybooks={() => navigateAwayFromHome('/playbooks')}
+            onNavigateSkillLibrary={() => navigateAwayFromHome('/skill-library')}
             onNavigateBuilds={() => navigateAwayFromHome('/builds')}
             buildsEnabled={buildsEnabled}
             onNavigateBrainstorm={() => navigateAwayFromHome('/brainstorm')}
@@ -1607,7 +1615,8 @@ function App() {
                     );
                   }
                   if (segments[0] === 'playbooks' && segments[1] === 'skills' && !segments[2]) {
-                    return <ProjectSkillLibraryPage project={selectedProject} />;
+                    // The library moved to its own sidebar module; keep old bookmarks working.
+                    return <Navigate to={`/skill-library${location.search}`} replace />;
                   }
                   if (segments[0] === 'playbooks' && segments[1] && segments[2] === 'edit') {
                     return (
@@ -1633,6 +1642,12 @@ function App() {
                   }
                   return <PlaybooksManagePage project={selectedProject} />;
                 })()}
+              </Suspense>
+            </ErrorBoundary>
+          ) : currentView === 'skill-library' ? (
+            <ErrorBoundary FallbackComponent={ViewErrorFallback}>
+              <Suspense fallback={<ViewSkeleton />}>
+                <ProjectSkillLibraryPage project={selectedProject} />
               </Suspense>
             </ErrorBoundary>
           ) : currentView === 'builds' ? (

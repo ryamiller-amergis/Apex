@@ -131,7 +131,6 @@ describe('TBI-016 VT-02 — the three production step types', () => {
       'cursor-agent',
       'foreach',
       'ingest-artifact',
-      'interactive-agent',
       'interview',
       'join',
       'notify',
@@ -232,6 +231,7 @@ describe('TBI-016 VT-04 — the registry is the only place a step type is declar
           file !== 'src/server/services/playbookMcpCapabilityService.ts' &&
           // Only a cursor-agent node loads a repository Skill. Cloud-agent steps are agent steps too.
           file !== 'src/server/services/playbookExecutionCapabilityService.ts' &&
+          file !== 'src/server/services/playbookAgentTaskMode.ts' &&
           file !== 'src/server/services/playbookReconciliationService.ts' &&
           file !== 'src/server/services/playbookRecommenderService.ts' &&
           // Display names for the canvas library. The registry remains the declaration.
@@ -290,6 +290,7 @@ describe('FEAT-008 VT-01 (TBI-032 a, d) — every step type declares inspectable
     expect([...new Set(specifiers)].sort()).toEqual([
       '../../../shared/types/playbook',
       '../../../shared/types/playbookConnectors',
+      '../../../shared/utils/playbookAgentTask',
       'zod',
     ]);
   });
